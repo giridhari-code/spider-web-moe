@@ -23,6 +23,7 @@ Core primitives
   OrbitConfig     — runtime knobs (loop budget, exit policy, page size)
   ActiveSet       — compacted batch rows still in orbit this loop
   OrbitEngine     — LLMEngine facade + scheduler orbit_work (0.2)
+  draft_orbit_*  — shallow-loop draft + full-loop verify (0.4)
   orbit_step()    — one continuous-batching step with orbit accounting
 
 vLLM concept          →  Orbit analogue
@@ -38,6 +39,7 @@ from .config import OrbitConfig
 from .active_set import ActiveSet, compact_active, scatter_active
 from .engine import OrbitEngine, OrbitStepStats
 from .graphs import DecodeGraphKey, orbit_graph_allowed
+from .draft import DraftOrbitConfig, DraftOrbitStats, draft_orbit_generate
 
 __all__ = [
     "OrbitConfig",
@@ -48,6 +50,9 @@ __all__ = [
     "OrbitStepStats",
     "DecodeGraphKey",
     "orbit_graph_allowed",
+    "DraftOrbitConfig",
+    "DraftOrbitStats",
+    "draft_orbit_generate",
 ]
 
-__orbit_version__ = "0.3.0"
+__orbit_version__ = "0.4.0"

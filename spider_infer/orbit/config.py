@@ -35,6 +35,8 @@ class OrbitConfig:
     # Orbit 0.3: allow CUDA graph capture when early_exit is False.
     enable_cuda_graph: bool = True
     graph_length_bucket: int = 64
+    # Orbit 0.4: speculative draft orbits (0 disables).
+    draft_tokens: int = 0
 
     def validate(self) -> "OrbitConfig":
         if self.max_loops < 1:
