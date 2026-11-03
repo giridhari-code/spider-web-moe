@@ -17,7 +17,8 @@ def device_auto():
 
 def main():
     p = argparse.ArgumentParser(
-        prog="spider", description="Spider-Web Looped MoE reference implementation"
+        prog="spider",
+        description="Sentinel 1.0 — Spider-Web Looped MoE (architecture: Spider)",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
