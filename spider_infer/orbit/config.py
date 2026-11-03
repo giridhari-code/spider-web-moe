@@ -42,6 +42,8 @@ class OrbitConfig:
     # Orbit Dobu: demand-load expert weight chunks (CPU storage → GPU on route)
     dobu_enabled: bool = False
     dobu_max_gpu_chunks: int = 4
+    # top-dobu: how many expert chunks activate per token (classic top-k)
+    top_dobu: int = 2
 
     def validate(self) -> "OrbitConfig":
         if self.max_loops < 1:

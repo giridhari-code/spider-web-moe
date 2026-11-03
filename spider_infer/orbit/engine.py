@@ -75,6 +75,8 @@ class OrbitEngine:
             model.cfg.offload_max_gpu_experts = int(
                 getattr(orbit_config, "dobu_max_gpu_chunks", 4)
             )
+            if hasattr(model.cfg, "top_k"):
+                model.cfg.top_k = int(getattr(orbit_config, "top_dobu", model.cfg.top_k))
         engine = LLMEngine(model, **engine_kwargs)
         # Prefer decode + Orbit loop budget in scheduler
         if hasattr(engine.config, "scheduler"):
@@ -191,6 +193,7 @@ class OrbitEngine:
                 "max_orbit_work": self.orbit_config.max_orbit_work,
                 "dobu_enabled": getattr(self.orbit_config, "dobu_enabled", False),
                 "dobu_max_gpu_chunks": getattr(self.orbit_config, "dobu_max_gpu_chunks", 4),
+                "top_dobu": getattr(self.orbit_config, "top_dobu", 2),
             },
             "steps": self._steps,
             "tokens_generated": self._tokens_generated,

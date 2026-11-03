@@ -165,6 +165,7 @@ class SpiderMoELayer(nn.Module):
         super().__init__()
         h, e = cfg.hidden_size, cfg.num_experts
         self.num_experts, self.top_k = e, cfg.top_k
+        self.top_dobu = int(cfg.top_k)  # Orbit Dobu name for top-k width
         self.edges_per_expert = cfg.edges_per_expert
         self.router = nn.Linear(h, e, bias=False)
         self.loop_bias = nn.Parameter(torch.zeros(cfg.num_loops, e))
@@ -280,7 +281,7 @@ class SpiderMoELayer(nn.Module):
         # Offload path: expert chunks stay on CPU; only routed experts hit GPU.
         if self._expert_store is not None:
             delta = self._expert_store.sparse_delta(
-                messages, top_indices, top_weights, self.top_k
+                messages, top_indices, top_weights, top_dobu=self.top_dobu
             )
         else:
             if self._int4_w_up is not None:
