@@ -37,6 +37,8 @@ class OrbitConfig:
     graph_length_bucket: int = 64
     # Orbit 0.4: speculative draft orbits (0 disables).
     draft_tokens: int = 0
+    # spider (default) | dense (minimal dense Transformer, no vLLM)
+    architecture: str = "spider"
 
     def validate(self) -> "OrbitConfig":
         if self.max_loops < 1:
