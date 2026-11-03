@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .memory.workspace import GLOBAL_WORKSPACE
+
 from dataclasses import dataclass
 
 import torch
@@ -133,9 +135,13 @@ class ModelRunner:
             else:
                 token_ids.append(seq.prompt_token_ids[-1])
 
-        input_ids = torch.tensor(
-            token_ids, dtype=torch.long, device=self.cache.device
-        ).unsqueeze(1)
+        # Workspace pool: reuse [B,1] long buffers across decode steps
+        b = len(token_ids)
+        buf = GLOBAL_WORKSPACE.acquire(
+            (b, 1), dtype=torch.long, device=self.cache.device
+        )
+        buf[:, 0] = torch.as_tensor(token_ids, dtype=torch.long, device=self.cache.device)
+        input_ids = buf
 
         early_exit = sequences[0].sampling_params.early_exit
         cache_len = self.cache.sequence_length(request_ids[0])
@@ -159,4 +165,6 @@ class ModelRunner:
         for seq in sequences:
             seq.num_computed_tokens += 1
 
-        return ModelOutput(logits=logits[:, -1, :], sequences=sequences)
+        out = ModelOutput(logits=logits[:, -1, :], sequences=sequences)
+        GLOBAL_WORKSPACE.release(input_ids)
+        return out

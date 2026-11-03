@@ -16,6 +16,7 @@ from .config import EngineConfig
 from .memory.block_manager import BlockManager
 from .model_runner import ModelRunner
 from .prefix_cache import PrefixCache
+from .memory.workspace import GLOBAL_WORKSPACE
 from .sampler import Sampler
 from .sampling_params import SamplingParams
 from .scheduler.scheduler import Scheduler
@@ -50,6 +51,7 @@ class LLMEngine:
         *,
         enable_prefix_cache: bool = True,
         prefix_cache_size: int = 128,
+        prefix_cache_max_bytes: int | None = None,
     ):
         self.model = model
         self.model.eval()
@@ -81,7 +83,36 @@ class LLMEngine:
             self.eos_token_id = tokenizer.eos_token_id
 
         self._generators: dict[str, torch.Generator] = {}
-        self.prefix_cache = PrefixCache(max_entries=prefix_cache_size) if enable_prefix_cache else None
+        self.prefix_cache = None
+        if enable_prefix_cache:
+            # Estimate bytes/token for shell KV (K+V) from model geometry.
+            try:
+                n_layers = len(model._attention_layers())
+                n_heads = model.cfg.num_heads
+                head_dim = model.cfg.hidden_size // model.cfg.num_heads
+                bpe = 2  # assume fp16 storage unless cache says otherwise
+                dtype = getattr(engine_config.cache, "dtype", "float16") if engine_config else "float16"
+                if str(dtype).startswith("fp8") or "float8" in str(dtype):
+                    bpe = 1
+                elif str(dtype) == "float32":
+                    bpe = 4
+                bytes_per_token = 2 * n_layers * n_heads * head_dim * bpe
+            except Exception:
+                bytes_per_token = 0
+
+            def _free_holder(rid):
+                try:
+                    if self.block_manager.has_request(rid):
+                        self.block_manager.free(rid)
+                except Exception:
+                    pass
+
+            self.prefix_cache = PrefixCache(
+                max_entries=prefix_cache_size,
+                max_bytes=prefix_cache_max_bytes,
+                bytes_per_token=bytes_per_token,
+                on_evict=_free_holder,
+            )
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -271,7 +302,17 @@ class LLMEngine:
                         self.block_manager.fork_prefix(
                             seq.request_id, holder, prefix_len=seq.num_prompt_tokens
                         )
-                    self.prefix_cache.insert(holder, seq.prompt_token_ids, seq.num_prompt_tokens)
+                    self.prefix_cache.insert(
+                        holder, seq.prompt_token_ids, seq.num_prompt_tokens
+                    )
+                    # Drop decode-only pages on the live request early if still present
+                    if self.block_manager.has_request(seq.request_id):
+                        try:
+                            self.block_manager.trim_to_length(
+                                seq.request_id, seq.num_prompt_tokens
+                            )
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
@@ -356,4 +397,6 @@ class LLMEngine:
             "waiting": len(self.scheduler.waiting),
             "running": len(self.scheduler.running),
             "prefix_cache_entries": len(self.prefix_cache) if self.prefix_cache else 0,
+            "prefix_cache": self.prefix_cache.stats() if self.prefix_cache else None,
+            "workspace_pool": GLOBAL_WORKSPACE.stats(),
         }

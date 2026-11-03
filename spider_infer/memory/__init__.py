@@ -7,6 +7,7 @@ from .optimize import (
     plan_kv_memory,
     trim_cuda_cache,
 )
+from .workspace import GLOBAL_WORKSPACE, WorkspacePool
 
 __all__ = [
     "AllocStatus",
@@ -17,4 +18,6 @@ __all__ = [
     "estimate_pool_bytes",
     "memory_report",
     "trim_cuda_cache",
+    "WorkspacePool",
+    "GLOBAL_WORKSPACE",
 ]

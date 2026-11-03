@@ -458,6 +458,29 @@ class GlobalPagedKVCache:
         self._sync_table(dst)
         return self.block_table(new_id)
 
+    def trim_to_length(self, request_id: Hashable, length: int) -> int:
+        """Drop physical pages beyond those needed for ``length`` tokens.
+
+        Used after decode completes when only a prompt prefix must stay resident
+        (or to release over-reserved capacity). Shared pages are refcounted.
+        Returns the number of pages released.
+        """
+        if length < 0:
+            raise ValueError("length cannot be negative")
+        req = self._request(request_id)
+        if length > req.length:
+            # Cannot invent tokens; only shrink or no-op.
+            length = req.length
+        needed = (length + self.page_size - 1) // self.page_size if length > 0 else 0
+        released = 0
+        while len(req.pages) > needed:
+            page = req.pages.pop()
+            self._decref(page)
+            released += 1
+        req.length = length
+        self._sync_table(req)
+        return released
+
     def free(self, request_id: Hashable):
         """Release request's pages and request slot; shared pages are refcounted."""
         if request_id not in self._requests:

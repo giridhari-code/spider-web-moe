@@ -129,6 +129,10 @@ class BlockManager:
     def reserve(self, request_id: Hashable, required_length: int) -> None:
         self.cache.reserve(request_id, required_length)
 
+    def trim_to_length(self, request_id: Hashable, length: int) -> int:
+        """Release pages past ``length``; returns pages freed."""
+        return self.cache.trim_to_length(request_id, length)
+
     def free(self, request_id: Hashable) -> None:
         try:
             self.cache.free(request_id)
