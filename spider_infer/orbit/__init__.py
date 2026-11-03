@@ -20,6 +20,7 @@ from .config import OrbitConfig
 from .active_set import ActiveSet, compact_active, scatter_active
 from .engine import OrbitEngine, OrbitStepStats
 from .graphs import DecodeGraphKey, orbit_graph_allowed
+from .dobu import DobuConfig, DobuStore, enable_dobu, dobu_stats
 from .draft import (
     DraftOrbitConfig,
     DraftOrbitStats,
@@ -39,11 +40,15 @@ __all__ = [
     "DraftOrbitConfig",
     "DraftOrbitStats",
     "draft_orbit_generate",
+    "DobuConfig",
+    "DobuStore",
+    "enable_dobu",
+    "dobu_stats",
     "draft_orbit_accept_rate_probe",
     "build_orbit_engine",
 ]
 
-__orbit_version__ = "0.4.0"
+__orbit_version__ = "0.5.0"
 
 
 def build_orbit_engine(model, orbit_config: OrbitConfig | None = None, **engine_kwargs):

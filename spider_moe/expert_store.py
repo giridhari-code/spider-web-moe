@@ -1,6 +1,6 @@
-"""Expert weight chunk store — load only the experts a token actually routes to.
+"""Orbit Dobu storage backend — load only experts a token routes to.
 
-Idea (Orbit / Spider):
+Orbit Dobu (Orbit / Spider):
   Full MoE weight tensors do not need to sit on the GPU.
   Keep expert chunks on CPU (pinned); after the router picks top-k,
   materialise only those expert FFNs on the compute device, run them,

@@ -39,6 +39,9 @@ class OrbitConfig:
     draft_tokens: int = 0
     # spider (default) | dense (minimal dense Transformer, no vLLM)
     architecture: str = "spider"
+    # Orbit Dobu: demand-load expert weight chunks (CPU storage → GPU on route)
+    dobu_enabled: bool = False
+    dobu_max_gpu_chunks: int = 4
 
     def validate(self) -> "OrbitConfig":
         if self.max_loops < 1:

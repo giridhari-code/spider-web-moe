@@ -17,6 +17,7 @@ from spider_moe.model import SpiderWebLM
 
 from .config import OrbitConfig
 from spider_infer.memory.optimize import memory_report
+from .dobu import dobu_stats
 
 
 @dataclass
@@ -68,6 +69,12 @@ class OrbitEngine:
         # Align model early-exit threshold with Orbit policy
         if hasattr(model, "cfg") and hasattr(model.cfg, "early_exit_threshold"):
             model.cfg.early_exit_threshold = orbit_config.exit_threshold
+        # Orbit Dobu — demand-loaded expert chunks
+        if getattr(orbit_config, "dobu_enabled", False) and hasattr(model, "cfg"):
+            model.cfg.offload_experts = True
+            model.cfg.offload_max_gpu_experts = int(
+                getattr(orbit_config, "dobu_max_gpu_chunks", 4)
+            )
         engine = LLMEngine(model, **engine_kwargs)
         # Prefer decode + Orbit loop budget in scheduler
         if hasattr(engine.config, "scheduler"):
@@ -182,6 +189,8 @@ class OrbitEngine:
                 "enable_cuda_graph": self.orbit_config.enable_cuda_graph,
                 "graph_length_bucket": self.orbit_config.graph_length_bucket,
                 "max_orbit_work": self.orbit_config.max_orbit_work,
+                "dobu_enabled": getattr(self.orbit_config, "dobu_enabled", False),
+                "dobu_max_gpu_chunks": getattr(self.orbit_config, "dobu_max_gpu_chunks", 4),
             },
             "steps": self._steps,
             "tokens_generated": self._tokens_generated,
@@ -197,6 +206,7 @@ class OrbitEngine:
                 and hasattr(self.inner.model_runner, "cuda_graph")
                 else None
             ),
+            "dobu": dobu_stats(self.inner.model),
             "memory": memory_report(
                 model=self.inner.model,
                 block_manager=getattr(self.inner, "block_manager", None)
