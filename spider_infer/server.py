@@ -1,4 +1,4 @@
-"""HTTP serving layer for SpiderInfer: REST + SSE streaming + web GUI.
+"""HTTP serving layer for Sentinel (Spider architecture): REST + SSE + web GUI.
 
 Endpoints:
   GET  /                         Web chat UI
@@ -25,6 +25,10 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .engine import LLMEngine
+try:
+    from spider_moe.branding import MODEL_ID as _DEFAULT_MODEL_ID
+except Exception:
+    _DEFAULT_MODEL_ID = "sentinel"
 from .metrics import ServeMetrics
 from .sampling_params import SamplingParams
 from . import ag_ui
@@ -38,7 +42,7 @@ _UI_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>SpiderInfer Chat</title>
+<title>Sentinel Chat</title>
 <style>
   :root {
     --bg: #0f1419; --panel: #1a2332; --border: #2d3a4f;
@@ -90,7 +94,7 @@ _UI_HTML = r"""<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1>SpiderInfer</h1>
+  <h1>Sentinel</h1>
   <span id="status">connecting…</span>
 </header>
 <div id="log"></div>
@@ -217,7 +221,7 @@ class ServeConfig:
         hard_max_tokens: int = 512,
         hard_max_prompt_tokens: int = 2048,
         request_timeout_s: float = 120.0,
-        model_name: str = "spider-web-moe",
+        model_name: str = _DEFAULT_MODEL_ID,
     ):
         self.host = host
         self.port = port
@@ -454,7 +458,7 @@ def _make_handler(server: InferenceServer):
                             {
                                 "id": server.config.model_name,
                                 "object": "model",
-                                "owned_by": "spider",
+                                "owned_by": "sentinel",
                             }
                         ],
                     },
