@@ -16,6 +16,7 @@ from spider_infer.sampling_params import SamplingParams
 from spider_moe.model import SpiderWebLM
 
 from .config import OrbitConfig
+from spider_infer.memory.optimize import memory_report
 
 
 @dataclass
@@ -195,6 +196,12 @@ class OrbitEngine:
                 if hasattr(self.inner, "model_runner")
                 and hasattr(self.inner.model_runner, "cuda_graph")
                 else None
+            ),
+            "memory": memory_report(
+                model=self.inner.model,
+                block_manager=getattr(self.inner, "block_manager", None)
+                or getattr(getattr(self.inner, "scheduler", None), "block_manager", None),
+                device=next(self.inner.model.parameters()).device,
             ),
         }
 

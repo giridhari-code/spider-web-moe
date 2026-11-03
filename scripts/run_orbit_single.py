@@ -7,6 +7,7 @@ import argparse
 import torch
 
 from spider_infer.config import EngineConfig
+from spider_infer.memory.optimize import engine_config_from_model_memory
 from spider_infer.orbit import OrbitConfig, build_orbit_engine
 from spider_infer.device_sync import HybridRuntime
 from spider_infer.server import ServeConfig, run_server
@@ -47,6 +48,10 @@ def main():
     print("device plan", hybrid.snapshot())
     model = hybrid.place_model(SpiderWebLM(cfg).eval())
     device = str(hybrid.plan.compute)
+    eng_cfg, mem_plan = engine_config_from_model_memory(
+        model, device=device, max_requests=32, prefer_dtype="float16"
+    )
+    print("memory plan", mem_plan.as_dict())
     orbit = build_orbit_engine(
         model,
         OrbitConfig(
@@ -54,7 +59,7 @@ def main():
             early_exit=args.early_exit,
             enable_cuda_graph=(args.device.startswith("cuda")),
         ),
-        engine_config=EngineConfig.default_for_model(cfg.max_seq_len, device),
+        engine_config=eng_cfg,
     )
     run_server(orbit, ServeConfig(host=args.host, port=args.port, model_name="sentinel"))
 
