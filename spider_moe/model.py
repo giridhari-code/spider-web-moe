@@ -10,6 +10,7 @@ from .rope import apply_rope, precompute_freqs_cis
 from .expert_parallel import all_reduce_sum_, ep_enabled, get_rank_world, owns_expert
 from .quant import Int4Tensor, quantize_int4
 from .sparse_experts import sparse_expert_delta
+from .expert_store import ExpertChunkStore, offload_module_list_to_cpu
 from .active_set import ActiveSet, compact_active, scatter_active
 
 
@@ -182,6 +183,18 @@ class SpiderMoELayer(nn.Module):
         self.residual_scale = cfg.residual_scale
         self.reinject_weight = cfg.re_inject_weight
         self.expert_parallel = bool(getattr(cfg, "expert_parallel", True))
+        self.offload_experts = bool(getattr(cfg, "offload_experts", False))
+        self._expert_store: ExpertChunkStore | None = None
+        if self.offload_experts:
+            # Build CPU chunk catalogue; expert modules themselves leave the GPU.
+            compute = next(self.router.parameters()).device
+            self._expert_store = ExpertChunkStore(
+                self.experts,
+                storage_device="cpu",
+                compute_device=compute,
+                max_gpu_experts=int(getattr(cfg, "offload_max_gpu_experts", 4)),
+            )
+            offload_module_list_to_cpu(self.experts)
         # Optional 4-bit expert weights (populated by quantize_experts()).
         self._int4_w_up: Int4Tensor | None = None
         self._int4_w_down: Int4Tensor | None = None
@@ -264,23 +277,29 @@ class SpiderMoELayer(nn.Module):
         # ----- Sparse Expert FFNs (only top-k selected experts per token) -----
         # Avoids materializing [B, T, E, H_up]. Numerically equivalent to the
         # previous dense path (see sparse_experts.sparse_expert_delta).
-        if self._int4_w_up is not None:
-            w_up = self._int4_w_up.dequantize(dtype=messages.dtype)
-            w_down = self._int4_w_down.dequantize(dtype=messages.dtype)
-            b_up = self._int4_b_up.to(dtype=messages.dtype, device=messages.device)
-            b_down = self._int4_b_down.to(dtype=messages.dtype, device=messages.device)
+        # Offload path: expert chunks stay on CPU; only routed experts hit GPU.
+        if self._expert_store is not None:
+            delta = self._expert_store.sparse_delta(
+                messages, top_indices, top_weights, self.top_k
+            )
         else:
-            w_up = torch.stack([ex[0].weight for ex in self.experts], dim=0)    # [E, H_up, H]
-            b_up = torch.stack([ex[0].bias for ex in self.experts], dim=0)      # [E, H_up]
-            w_down = torch.stack([ex[2].weight for ex in self.experts], dim=0)  # [E, H, H_up]
-            b_down = torch.stack([ex[2].bias for ex in self.experts], dim=0)    # [E, H]
+            if self._int4_w_up is not None:
+                w_up = self._int4_w_up.dequantize(dtype=messages.dtype)
+                w_down = self._int4_w_down.dequantize(dtype=messages.dtype)
+                b_up = self._int4_b_up.to(dtype=messages.dtype, device=messages.device)
+                b_down = self._int4_b_down.to(dtype=messages.dtype, device=messages.device)
+            else:
+                w_up = torch.stack([ex[0].weight for ex in self.experts], dim=0)
+                b_up = torch.stack([ex[0].bias for ex in self.experts], dim=0)
+                w_down = torch.stack([ex[2].weight for ex in self.experts], dim=0)
+                b_down = torch.stack([ex[2].bias for ex in self.experts], dim=0)
 
-        delta = sparse_expert_delta(
-            messages, top_indices, top_weights,
-            w_up, b_up, w_down, b_down,
-            num_experts=e, top_k=self.top_k,
-            expert_parallel=getattr(self, "expert_parallel", True),
-        )
+            delta = sparse_expert_delta(
+                messages, top_indices, top_weights,
+                w_up, b_up, w_down, b_down,
+                num_experts=e, top_k=self.top_k,
+                expert_parallel=getattr(self, "expert_parallel", True),
+            )
 
         updated = self.norm(h + self.residual_scale * delta + self.reinject_weight * x0)
         if not return_stats:
@@ -352,6 +371,20 @@ class SpiderWebLM(nn.Module):
             return tok
         positions = torch.arange(position, position + seq_len, device=input_ids.device)
         return tok + self.position_embedding(positions).unsqueeze(0)
+
+    def to(self, *args, **kwargs):
+        out = super().to(*args, **kwargs)
+        # Keep expert chunks on CPU when offload is enabled (super().to would
+        # otherwise pull them onto the compute device).
+        rec = getattr(out, "recurrent", None)
+        if rec is not None and getattr(rec, "offload_experts", False):
+            offload_module_list_to_cpu(rec.experts)
+            if rec._expert_store is not None:
+                try:
+                    rec._expert_store.compute_device = next(out.parameters()).device
+                except StopIteration:
+                    pass
+        return out
 
     def quantize_moe_experts(self, group_size: int = 64) -> None:
         """Quantize recurrent MoE expert weights to 4-bit (inference)."""

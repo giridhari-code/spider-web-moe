@@ -25,6 +25,10 @@ class ModelConfig:
     rope_theta: float = 10000.0
     # Expert parallel is active only when torch.distributed is initialized.
     expert_parallel: bool = True
+    # Keep expert FFN weights on CPU; materialise only routed experts on GPU.
+    offload_experts: bool = False
+    # Max expert chunks cached on GPU when offload_experts=True (LRU).
+    offload_max_gpu_experts: int = 4
     # Inference-only: set True then call model.quantize_moe_experts()
     moe_int4: bool = False
     moe_int4_group_size: int = 64
