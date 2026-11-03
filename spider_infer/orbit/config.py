@@ -32,6 +32,9 @@ class OrbitConfig:
     page_size: int = 16
     # Orbit 0.2: scheduler decode budget in (seq × loops) units; 0 = unlimited.
     max_orbit_work: int = 0
+    # Orbit 0.3: allow CUDA graph capture when early_exit is False.
+    enable_cuda_graph: bool = True
+    graph_length_bucket: int = 64
 
     def validate(self) -> "OrbitConfig":
         if self.max_loops < 1:

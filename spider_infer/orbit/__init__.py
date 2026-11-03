@@ -37,6 +37,7 @@ Tensor parallel          Expert-parallel inside SpiderMoELayer
 from .config import OrbitConfig
 from .active_set import ActiveSet, compact_active, scatter_active
 from .engine import OrbitEngine, OrbitStepStats
+from .graphs import DecodeGraphKey, orbit_graph_allowed
 
 __all__ = [
     "OrbitConfig",
@@ -45,6 +46,8 @@ __all__ = [
     "scatter_active",
     "OrbitEngine",
     "OrbitStepStats",
+    "DecodeGraphKey",
+    "orbit_graph_allowed",
 ]
 
-__orbit_version__ = "0.2.0"
+__orbit_version__ = "0.3.0"

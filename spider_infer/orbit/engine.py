@@ -70,6 +70,13 @@ class OrbitEngine:
             engine.config.scheduler.prefer_decode = orbit_config.prefer_decode
             engine.config.scheduler.default_orbit_loops = orbit_config.max_loops
             engine.config.scheduler.max_orbit_work = orbit_config.max_orbit_work
+        # Orbit 0.3: CUDA graph policy on the model runner
+        runner = getattr(engine, "model_runner", None)
+        if runner is not None and hasattr(runner, "cuda_graph"):
+            import torch as _torch
+            cg = runner.cuda_graph
+            cg.enabled = bool(orbit_config.enable_cuda_graph) and _torch.cuda.is_available()
+            cg.length_bucket_size = int(orbit_config.graph_length_bucket)
         return cls(inner=engine, config=orbit_config)
 
     @classmethod
@@ -83,6 +90,13 @@ class OrbitEngine:
             engine.config.scheduler.prefer_decode = orbit_config.prefer_decode
             engine.config.scheduler.default_orbit_loops = orbit_config.max_loops
             engine.config.scheduler.max_orbit_work = orbit_config.max_orbit_work
+        # Orbit 0.3: CUDA graph policy on the model runner
+        runner = getattr(engine, "model_runner", None)
+        if runner is not None and hasattr(runner, "cuda_graph"):
+            import torch as _torch
+            cg = runner.cuda_graph
+            cg.enabled = bool(orbit_config.enable_cuda_graph) and _torch.cuda.is_available()
+            cg.length_bucket_size = int(orbit_config.graph_length_bucket)
         return cls(inner=engine, config=orbit_config)
 
     # ------------------------------------------------------------------
@@ -145,6 +159,9 @@ class OrbitEngine:
                 "exit_threshold": self.config.exit_threshold,
                 "prefer_decode": self.config.prefer_decode,
                 "page_size": self.config.page_size,
+                "enable_cuda_graph": self.config.enable_cuda_graph,
+                "graph_length_bucket": self.config.graph_length_bucket,
+                "max_orbit_work": self.config.max_orbit_work,
             },
             "steps": self._steps,
             "tokens_generated": self._tokens_generated,
@@ -154,6 +171,12 @@ class OrbitEngine:
                 "loops_budget": self._last_stats.loops_budget,
                 "early_exit_enabled": self._last_stats.early_exit_enabled,
             },
+            "cuda_graph": (
+                self.inner.model_runner.cuda_graph.stats()
+                if hasattr(self.inner, "model_runner")
+                and hasattr(self.inner.model_runner, "cuda_graph")
+                else None
+            ),
         }
 
     def stats(self) -> dict[str, Any]:

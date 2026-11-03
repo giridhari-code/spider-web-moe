@@ -139,6 +139,7 @@ class ModelRunner:
 
         early_exit = sequences[0].sampling_params.early_exit
         cache_len = self.cache.sequence_length(request_ids[0])
+        num_loops = int(getattr(self.model.cfg, "num_loops", 1))
 
         def _fn(ids, rids):
             logits, _ = self.model.decode_step_paged(
@@ -146,9 +147,12 @@ class ModelRunner:
             )
             return logits
 
-        # CUDA graph only when early_exit is off (static control flow).
+        # Orbit 0.3: CUDA graph only when early_exit is off (static ActiveSet / loops).
+        # Key includes (batch, length_bucket, num_loops).
         if not early_exit:
-            logits = self.cuda_graph.run(_fn, input_ids, request_ids, cache_len)
+            logits = self.cuda_graph.run(
+                _fn, input_ids, request_ids, cache_len, num_loops=num_loops
+            )
         else:
             logits = _fn(input_ids, request_ids)
 
