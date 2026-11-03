@@ -39,10 +39,13 @@ class OrbitEngine:
         orbit = OrbitEngine.from_model(model, OrbitConfig(early_exit=True))
         outs = orbit.generate(prompt_ids, SamplingParams(max_tokens=64))
         print(orbit.orbit_snapshot())
+
+    Drop-in: exposes the same surface as LLMEngine via delegation so
+    ``run_server(orbit)`` works without unwrapping.
     """
 
     inner: LLMEngine
-    config: OrbitConfig
+    orbit_config: OrbitConfig
     _steps: int = 0
     _tokens_generated: int = 0
     _prefill_steps: int = 0
@@ -77,7 +80,7 @@ class OrbitEngine:
             cg = runner.cuda_graph
             cg.enabled = bool(orbit_config.enable_cuda_graph) and _torch.cuda.is_available()
             cg.length_bucket_size = int(orbit_config.graph_length_bucket)
-        return cls(inner=engine, config=orbit_config)
+        return cls(inner=engine, orbit_config=orbit_config)
 
     @classmethod
     def from_engine(
@@ -97,11 +100,27 @@ class OrbitEngine:
             cg = runner.cuda_graph
             cg.enabled = bool(orbit_config.enable_cuda_graph) and _torch.cuda.is_available()
             cg.length_bucket_size = int(orbit_config.graph_length_bucket)
-        return cls(inner=engine, config=orbit_config)
+        return cls(inner=engine, orbit_config=orbit_config)
 
     # ------------------------------------------------------------------
     # Generation API (thin wrap)
     # ------------------------------------------------------------------
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    @property
+    def model(self):
+        return self.inner.model
+
+    @property
+    def tokenizer(self):
+        return self.inner.tokenizer
+
+    @property
+    def config(self):
+        """EngineConfig (inner) — use orbit_config for Orbit knobs."""
+        return self.inner.config
 
     def generate(self, *args: Any, **kwargs: Any) -> list[RequestOutput]:
         # Stamp early_exit onto sampling params when Orbit enables it.
@@ -109,21 +128,21 @@ class OrbitEngine:
         params = kwargs.get("sampling_params")
         if params is None and len(args) >= 2:
             params = args[1]
-        if params is not None and self.config.early_exit:
+        if params is not None and self.orbit_config.early_exit:
             if isinstance(params, SamplingParams):
                 params.early_exit = True
             elif isinstance(params, list):
                 for p in params:
                     p.early_exit = True
-        elif params is None and self.config.early_exit:
+        elif params is None and self.orbit_config.early_exit:
             kwargs["sampling_params"] = SamplingParams(early_exit=True)
 
         return self.inner.generate(*args, **kwargs)
 
     def generate_stream(self, *args: Any, **kwargs: Any):
-        if "sampling_params" not in kwargs and self.config.early_exit:
+        if "sampling_params" not in kwargs and self.orbit_config.early_exit:
             kwargs["sampling_params"] = SamplingParams(early_exit=True)
-        elif kwargs.get("sampling_params") is not None and self.config.early_exit:
+        elif kwargs.get("sampling_params") is not None and self.orbit_config.early_exit:
             kwargs["sampling_params"].early_exit = True
         return self.inner.generate_stream(*args, **kwargs)
 
@@ -135,8 +154,8 @@ class OrbitEngine:
         # (detailed loop stats live inside model forward; exposed via snapshot)
         self._last_stats = OrbitStepStats(
             scheduled=before_running,
-            loops_budget=self.config.max_loops,
-            early_exit_enabled=self.config.early_exit,
+            loops_budget=self.orbit_config.max_loops,
+            early_exit_enabled=self.orbit_config.early_exit,
         )
         for o in outs:
             self._tokens_generated += len(o.output_token_ids)
@@ -150,18 +169,18 @@ class OrbitEngine:
         base = self.inner.stats()
         return {
             "technology": "Orbit",
-            "orbit_version": "0.1.0",
+            "orbit_version": "0.4.0",
             "model": "Sentinel",
             "architecture": "Spider",
             "config": {
-                "max_loops": self.config.max_loops,
-                "early_exit": self.config.early_exit,
-                "exit_threshold": self.config.exit_threshold,
-                "prefer_decode": self.config.prefer_decode,
-                "page_size": self.config.page_size,
-                "enable_cuda_graph": self.config.enable_cuda_graph,
-                "graph_length_bucket": self.config.graph_length_bucket,
-                "max_orbit_work": self.config.max_orbit_work,
+                "max_loops": self.orbit_config.max_loops,
+                "early_exit": self.orbit_config.early_exit,
+                "exit_threshold": self.orbit_config.exit_threshold,
+                "prefer_decode": self.orbit_config.prefer_decode,
+                "page_size": self.orbit_config.page_size,
+                "enable_cuda_graph": self.orbit_config.enable_cuda_graph,
+                "graph_length_bucket": self.orbit_config.graph_length_bucket,
+                "max_orbit_work": self.orbit_config.max_orbit_work,
             },
             "steps": self._steps,
             "tokens_generated": self._tokens_generated,

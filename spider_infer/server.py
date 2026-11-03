@@ -25,6 +25,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .engine import LLMEngine
+from .orbit import OrbitEngine
 try:
     from spider_moe.branding import MODEL_ID as _DEFAULT_MODEL_ID
 except Exception:
@@ -236,7 +237,7 @@ class ServeConfig:
 class InferenceServer:
     """Owns engine + metrics + concurrency gate."""
 
-    def __init__(self, engine: LLMEngine, config: ServeConfig | None = None):
+    def __init__(self, engine: LLMEngine | OrbitEngine, config: ServeConfig | None = None):
         self.engine = engine
         self.config = config or ServeConfig()
         self.metrics = ServeMetrics()
@@ -268,12 +269,16 @@ class InferenceServer:
     ) -> SamplingParams:
         mt = max_tokens or self.config.default_max_tokens
         mt = max(1, min(int(mt), self.config.hard_max_tokens))
+        early_exit = False
+        if isinstance(self.engine, OrbitEngine):
+            early_exit = bool(self.engine.orbit_config.early_exit)
         return SamplingParams(
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
             max_tokens=mt,
             seed=seed,
+            early_exit=early_exit,
         )
 
     def _decode_token(self, tid: int) -> str:
@@ -702,17 +707,14 @@ def _make_handler(server: InferenceServer):
     return Handler
 
 
-def run_server(engine: LLMEngine, config: ServeConfig | None = None) -> None:
+def run_server(engine: LLMEngine | OrbitEngine, config: ServeConfig | None = None) -> None:
     config = config or ServeConfig()
     app = InferenceServer(engine, config)
     handler = _make_handler(app)
     httpd = ThreadingHTTPServer((config.host, config.port), handler)
-    print(
-        f"SpiderInfer UI  → http://{config.host}:{config.port}/"
-    )
-    print(
-        f"API             → http://{config.host}:{config.port}/v1/chat/completions"
-    )
+    print(f"Sentinel + Orbit → http://{config.host}:{config.port}/")
+    print(f"API              → http://{config.host}:{config.port}/v1/chat/completions")
+    print(f"Orbit snapshot   → http://{config.host}:{config.port}/v1/orbit")
     print(f"max_inflight={config.max_inflight}")
     try:
         httpd.serve_forever()

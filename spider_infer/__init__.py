@@ -21,6 +21,13 @@ __all__ = [
 
 # Orbit — Spider-native serving technology (vLLM analogue for Sentinel)
 try:
-    from .orbit import OrbitConfig, OrbitEngine, ActiveSet  # noqa: F401
+    from .orbit import (  # noqa: F401
+        OrbitConfig,
+        OrbitEngine,
+        ActiveSet,
+        build_orbit_engine,
+        draft_orbit_generate,
+        DraftOrbitConfig,
+    )
 except ImportError:
     pass
