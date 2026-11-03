@@ -1,4 +1,4 @@
-"""SpiderInfer — continuous-batching inference engine for Spider-Web MoE."""
+"""SpiderInfer — continuous-batching inference engine for Sentinel (Spider architecture)."""
 
 from .config import CacheConfig, EngineConfig, SchedulerConfig
 from .engine import LLMEngine, RequestOutput
@@ -17,7 +17,3 @@ __all__ = [
     "SequenceStatus",
     "load_checkpoint",
 ]
-
-# Serving (optional import path)
-# from spider_infer.server import InferenceServer, ServeConfig, run_server
-
