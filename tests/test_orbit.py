@@ -42,16 +42,18 @@ def test_orbit_config_validate():
 
 def test_active_set_compact_scatter():
     x = torch.arange(12, dtype=torch.float).view(4, 3)
+    original = x.clone()
     mask = torch.tensor([True, False, True, False])
     indices = mask.nonzero(as_tuple=False).flatten()
     active = ActiveSet(mask=mask, indices=indices)
     compacted = compact_active(x, active)
     assert compacted.shape == (2, 3)
-    assert torch.equal(compacted[0], x[0])
-    assert torch.equal(compacted[1], x[2])
+    assert torch.equal(compacted[0], original[0])
+    assert torch.equal(compacted[1], original[2])
     restored = scatter_active(x, active, compacted * 2)
-    assert torch.equal(restored[0], x[0] * 2)
-    assert torch.equal(restored[1], x[1])  # untouched
+    assert torch.equal(restored[0], original[0] * 2)
+    assert torch.equal(restored[1], original[1])  # untouched
+    assert torch.equal(restored[2], original[2] * 2)
 
 
 def test_active_set_drop():

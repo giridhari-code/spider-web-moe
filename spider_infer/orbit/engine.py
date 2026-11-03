@@ -65,9 +65,11 @@ class OrbitEngine:
         if hasattr(model, "cfg") and hasattr(model.cfg, "early_exit_threshold"):
             model.cfg.early_exit_threshold = orbit_config.exit_threshold
         engine = LLMEngine(model, **engine_kwargs)
-        # Prefer decode in scheduler when Orbit says so
+        # Prefer decode + Orbit loop budget in scheduler
         if hasattr(engine.config, "scheduler"):
             engine.config.scheduler.prefer_decode = orbit_config.prefer_decode
+            engine.config.scheduler.default_orbit_loops = orbit_config.max_loops
+            engine.config.scheduler.max_orbit_work = orbit_config.max_orbit_work
         return cls(inner=engine, config=orbit_config)
 
     @classmethod
@@ -76,7 +78,12 @@ class OrbitEngine:
         engine: LLMEngine,
         orbit_config: OrbitConfig | None = None,
     ) -> "OrbitEngine":
-        return cls(inner=engine, config=(orbit_config or OrbitConfig()).validate())
+        orbit_config = (orbit_config or OrbitConfig()).validate()
+        if hasattr(engine.config, "scheduler"):
+            engine.config.scheduler.prefer_decode = orbit_config.prefer_decode
+            engine.config.scheduler.default_orbit_loops = orbit_config.max_loops
+            engine.config.scheduler.max_orbit_work = orbit_config.max_orbit_work
+        return cls(inner=engine, config=orbit_config)
 
     # ------------------------------------------------------------------
     # Generation API (thin wrap)

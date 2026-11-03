@@ -30,6 +30,8 @@ class OrbitConfig:
     prefer_decode: bool = True
     track_orbit_stats: bool = True
     page_size: int = 16
+    # Orbit 0.2: scheduler decode budget in (seq × loops) units; 0 = unlimited.
+    max_orbit_work: int = 0
 
     def validate(self) -> "OrbitConfig":
         if self.max_loops < 1:
@@ -38,4 +40,6 @@ class OrbitConfig:
             raise ValueError("exit_threshold must be in (0, 1)")
         if self.page_size < 1:
             raise ValueError("page_size must be >= 1")
+        if self.max_orbit_work < 0:
+            raise ValueError("max_orbit_work must be >= 0")
         return self

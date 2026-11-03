@@ -10,6 +10,7 @@ from .rope import apply_rope, precompute_freqs_cis
 from .expert_parallel import all_reduce_sum_, ep_enabled, get_rank_world, owns_expert
 from .quant import Int4Tensor, quantize_int4
 from .sparse_experts import sparse_expert_delta
+from .active_set import ActiveSet, compact_active, scatter_active
 
 
 
@@ -384,22 +385,28 @@ class SpiderWebLM(nn.Module):
         return h
 
     def _run_recurrent_decode(self, h, x0, early_exit):
-        # Decode inputs have one token per sequence. Compact active batch rows
-        # so exited rows stop consuming recurrent-loop compute.
+        """Decode path with Orbit ActiveSet compaction.
+
+        When early_exit is enabled, rows that pass the exit_head threshold leave
+        the orbit and stop consuming further recurrent loops. Compaction uses the
+        shared ActiveSet primitive (Orbit 0.2).
+        """
         if not early_exit:
             return self._run_recurrent_full(h, x0)
-        active = torch.ones(h.shape[0], dtype=torch.bool, device=h.device)
+        active = ActiveSet.all_active(h.shape[0], h.device)
         for loop_idx in range(self.cfg.num_loops):
-            indices = active.nonzero(as_tuple=False).flatten()
-            if indices.numel() == 0:
+            if active.n_active == 0:
                 break
-            h_active = h.index_select(0, indices)
-            x0_active = x0.index_select(0, indices)
+            h_active = compact_active(h, active)
+            x0_active = compact_active(x0, active)
             h_new = self.recurrent(h_active, x0_active, loop_idx)
-            h = h.index_copy(0, indices, h_new)
+            h = scatter_active(h, active, h_new)
             confidence = torch.sigmoid(self.recurrent.exit_head(h_new).float()).squeeze(-1)
-            exited = confidence[:, 0] > self.cfg.early_exit_threshold
-            active[indices[exited]] = False
+            # exit_head may return [N, 1] or [N]
+            if confidence.ndim > 1:
+                confidence = confidence[:, 0]
+            exited = confidence > self.cfg.early_exit_threshold
+            active = active.drop(exited)
         return h
 
     @torch.no_grad()

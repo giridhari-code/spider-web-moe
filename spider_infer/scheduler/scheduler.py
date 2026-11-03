@@ -27,6 +27,8 @@ class SchedulerOutput:
     finished: list[Sequence] = field(default_factory=list)
     # Sequences whose KV was freed and must restart prefill.
     preempted: list[Sequence] = field(default_factory=list)
+    # Orbit 0.2: sum of loop-work units for scheduled decode sequences.
+    orbit_work: int = 0
 
 
 class Scheduler:
@@ -93,6 +95,16 @@ class Scheduler:
             if seq in self.waiting:
                 self.waiting.remove(seq)
 
+
+    def _orbit_cost(self, seq: Sequence) -> int:
+        """Loop-work units for one decode step of this sequence (Orbit 0.2)."""
+        meta = seq.metadata.get("orbit_loops")
+        if meta is not None:
+            return max(1, int(meta))
+        # Prefer sampling_params hint when early_exit is off → full loops.
+        loops = getattr(self.config, "default_orbit_loops", 4)
+        return max(1, int(loops))
+
     def _schedule_decode(
         self,
         candidates: list[Sequence],
@@ -115,9 +127,15 @@ class Scheduler:
 
         scheduled: list[Sequence] = []
         budget = self.config.max_num_batched_tokens
+        orbit_work = 0
+        max_orbit = int(getattr(self.config, "max_orbit_work", 0) or 0)
 
         for seq in group:
             if len(scheduled) >= self.config.max_num_seqs or budget < 1:
+                break
+            cost = self._orbit_cost(seq)
+            if max_orbit > 0 and scheduled and orbit_work + cost > max_orbit:
+                # Defer remaining decode rows to keep loop-budget under ceiling.
                 break
             status = self.block_manager.can_append(seq.request_id, extra_tokens=1)
             if status is AllocStatus.NEVER:
@@ -134,6 +152,7 @@ class Scheduler:
                     continue
             scheduled.append(seq)
             budget -= 1
+            orbit_work += cost
 
         return SchedulerOutput(
             scheduled=scheduled,
@@ -141,6 +160,7 @@ class Scheduler:
             num_batched_tokens=len(scheduled),
             finished=finished,
             preempted=preempted,
+            orbit_work=orbit_work,
         )
 
     def _try_preempt_for_decode(

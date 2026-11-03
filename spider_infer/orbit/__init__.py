@@ -22,7 +22,7 @@ Core primitives
 ---------------
   OrbitConfig     — runtime knobs (loop budget, exit policy, page size)
   ActiveSet       — compacted batch rows still in orbit this loop
-  OrbitEngine     — LLMEngine facade that records orbit metrics
+  OrbitEngine     — LLMEngine facade + scheduler orbit_work (0.2)
   orbit_step()    — one continuous-batching step with orbit accounting
 
 vLLM concept          →  Orbit analogue
@@ -47,4 +47,4 @@ __all__ = [
     "OrbitStepStats",
 ]
 
-__orbit_version__ = "0.1.0"
+__orbit_version__ = "0.2.0"

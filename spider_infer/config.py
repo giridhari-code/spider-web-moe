@@ -55,6 +55,11 @@ class SchedulerConfig:
     enable_preemption: bool = True
     # Max times a sequence may be preempted before it is aborted.
     max_preemptions: int = 3
+    # Orbit 0.2: decode work budget measured in (sequence × loops) units.
+    # 0 = unlimited. Each scheduled decode sequence costs `default_orbit_loops`
+    # (or seq.metadata["orbit_loops"] when set).
+    max_orbit_work: int = 0
+    default_orbit_loops: int = 4
 
 
 @dataclass
