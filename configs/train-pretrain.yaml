@@ -1,0 +1,32 @@
+model:
+  vocab_size: 32000
+  hidden_size: 512
+  num_heads: 8
+  num_experts: 8
+  top_k: 2
+  edges_per_expert: 3
+  num_loops: 6
+  num_prelude_layers: 2
+  num_coda_layers: 2
+  expert_ffn_size: 2048
+  loop_embed_size: 32
+  residual_scale: 0.5
+  re_inject_weight: 0.1
+  early_exit_threshold: 0.85
+  dropout: 0.0
+  max_seq_len: 2048
+training:
+  batch_size: 8
+  seq_len: 512
+  steps: 1000
+  learning_rate: 0.0003
+  warmup_steps: 100
+  weight_decay: 0.1
+  grad_clip: 1.0
+  aux_loss_weight: 0.01
+  edge_loss_weight: 0.01
+  grad_accum: 1
+  log_every: 10
+  save_every: 500
+  data_path: data/train.bin
+  checkpoint_dir: checkpoints/pretrain

@@ -1,0 +1,27 @@
+model:
+  vocab_size: 4096
+  hidden_size: 128
+  num_heads: 4
+  num_experts: 4
+  top_k: 2
+  edges_per_expert: 2
+  num_loops: 3
+  num_prelude_layers: 2
+  num_coda_layers: 2
+  expert_ffn_size: 256
+  loop_embed_size: 16
+  residual_scale: 0.5
+  re_inject_weight: 0.1
+  early_exit_threshold: 0.85
+  dropout: 0.0
+  max_seq_len: 512
+training:
+  batch_size: 4
+  seq_len: 128
+  steps: 100
+  learning_rate: 0.0003
+  warmup_steps: 10
+  log_every: 5
+  save_every: 50
+  data_path: data/train.bin
+  checkpoint_dir: checkpoints

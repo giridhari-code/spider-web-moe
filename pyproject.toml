@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spider-web-moe"
+version = "0.1.0"
+description = "Runnable PyTorch reference implementation of Spider-Web Looped MoE"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.1", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+triton = ["triton>=3.0"]
+tokenizers = ["transformers>=4.45", "numpy>=1.24"]
+wikipedia = ["datasets>=3.0", "tokenizers>=0.20", "numpy>=1.24"]
+
+[project.scripts]
+spider = "spider_moe.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["spider_moe*", "spider_infer*"]
