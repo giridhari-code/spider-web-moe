@@ -17,3 +17,10 @@ __all__ = [
     "SequenceStatus",
     "load_checkpoint",
 ]
+
+
+# Orbit — Spider-native serving technology (vLLM analogue for Sentinel)
+try:
+    from .orbit import OrbitConfig, OrbitEngine, ActiveSet  # noqa: F401
+except ImportError:
+    pass
