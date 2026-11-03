@@ -1,30 +1,30 @@
 """Orbit Dobu — demand-loaded weight chunks for Spider/Sentinel.
 
-Name
-----
-  Orbit  = serving technology
-  Dobu   = this optimisation: only the weight slices needed for the current
-           input occupy compute memory; the rest stay on host (CPU) storage.
+Two *different* controls (do not conflate them)
+----------------------------------------------
+  top_k     (Spider / MoE router)
+            How many experts each *token* mixes in the forward pass.
+            Purely a compute / quality knob. Lives on ModelConfig.top_k.
 
-Vocabulary
-----------
-  top-k (classic MoE)  →  **top-dobu** in Orbit language
-  The router still ranks experts; Dobu materialises only the **top-dobu chunks**
-  for that token. Idle chunks never enter the compute device working set.
+  top_dobu  (Orbit Dobu residency)
+            How many expert *weight chunks* may stay hot on the compute
+            device (GPU LRU working set). Purely a memory knob.
+            Idle chunks remain on CPU storage even if the catalogue is huge.
 
-Principle
----------
-  A full MoE checkpoint is a catalogue of expert chunks.
-  The router decides which chunks a token needs (top-dobu).
-  Dobu materialises *only those chunks* on the GPU (small LRU working set),
-  runs the FFN, and leaves idle experts off-device.
+Example
+-------
+  top_k=2, top_dobu=4
+    → every token routes to 2 experts (compute)
+    → up to 4 expert weight tensors may remain resident on GPU (memory)
+    → a step that touches experts {0,1,2} loads those three; LRU may keep
+      a fourth from a previous step warm.
 
 Stack
 -----
   Sentinel  = model product
-  Spider    = architecture
+  Spider    = architecture (owns top_k)
   Orbit     = serving runtime
-  Dobu      = sparse weight residency + top-dobu selection policy
+  Dobu      = weight-chunk residency (owns top_dobu)
 """
 from __future__ import annotations
 
@@ -36,67 +36,63 @@ from spider_moe.expert_store import (
     offload_module_list_to_cpu,
 )
 
-# Public aliases — Orbit Dobu vocabulary
 DobuChunk = ExpertChunk
 DobuStore = ExpertChunkStore
 
 
 @dataclass
 class DobuConfig:
-    """Knobs for Orbit Dobu weight residency + top-dobu routing width."""
+    """Orbit Dobu memory policy — independent of router top_k."""
 
     enabled: bool = True
-    """Master switch — maps to ModelConfig.offload_experts."""
+    """Maps to ModelConfig.offload_experts."""
 
-    top_dobu: int = 2
-    """How many expert chunks each token may activate (replaces classic top-k name).
+    top_dobu: int = 4
+    """Max expert weight chunks kept hot on the compute device (GPU LRU).
 
-    Maps to ModelConfig.top_k for the router; Orbit code and metrics say top-dobu.
+    This is NOT router width. Router width is ModelConfig.top_k.
     """
 
-    max_gpu_chunks: int = 4
-    """How many expert chunks may stay hot on the compute device (LRU working set)."""
-
     storage_device: str = "cpu"
-    """Where idle chunks live (usually CPU; future: disk-backed)."""
-
     pin_memory: bool = True
-    """Pin host storage for faster H2D when CUDA is present."""
+
+    # Back-compat alias used in older call sites
+    @property
+    def max_gpu_chunks(self) -> int:
+        return self.top_dobu
 
     def apply_to_model_config(self, model_cfg) -> None:
+        """Enable offload + residency only. Does *not* change top_k."""
         model_cfg.offload_experts = bool(self.enabled)
-        model_cfg.offload_max_gpu_experts = int(self.max_gpu_chunks)
-        # top-dobu → router width
-        if hasattr(model_cfg, "top_k"):
-            model_cfg.top_k = int(self.top_dobu)
+        model_cfg.offload_max_gpu_experts = int(self.top_dobu)
+        # intentionally no assignment to model_cfg.top_k
 
     def to_dict(self) -> dict:
         return {
             "name": "Orbit Dobu",
             "enabled": self.enabled,
             "top_dobu": self.top_dobu,
-            "top_dobu_chunks": self.top_dobu,  # explicit alias in metrics
-            "max_gpu_chunks": self.max_gpu_chunks,
+            "top_dobu_role": "gpu_chunk_residency_lru",
             "storage_device": self.storage_device,
             "pin_memory": self.pin_memory,
+            "note": "top_k is separate (router); top_dobu is Dobu VRAM working set",
         }
 
 
 def enable_dobu(model, dobu_config: DobuConfig | None = None) -> DobuStore:
-    """Attach / rebuild Dobu store on an existing SpiderWebLM (after .to(device))."""
+    """Attach Dobu store. Leaves model.cfg.top_k / recurrent.top_k untouched."""
     dobu_config = dobu_config or DobuConfig()
     dobu_config.apply_to_model_config(model.cfg)
-    # Keep module fields in sync with config
-    if hasattr(model, "recurrent"):
-        model.recurrent.top_k = int(dobu_config.top_dobu)
-        model.recurrent.top_dobu = int(dobu_config.top_dobu)
 
     rec = model.recurrent
+    # Residency budget only — do not overwrite router top_k
+    rec.top_dobu = int(dobu_config.top_dobu)
+
     store = DobuStore(
         rec.experts,
         storage_device=dobu_config.storage_device,
         compute_device=next(model.parameters()).device,
-        max_gpu_experts=dobu_config.max_gpu_chunks,
+        max_gpu_experts=int(dobu_config.top_dobu),
         pin_memory=dobu_config.pin_memory,
     )
     offload_module_list_to_cpu(rec.experts)
@@ -106,17 +102,16 @@ def enable_dobu(model, dobu_config: DobuConfig | None = None) -> DobuStore:
 
 
 def dobu_stats(model) -> dict | None:
-    """Return Dobu residency stats, or None if Dobu is not active."""
     rec = getattr(model, "recurrent", None)
     store = getattr(rec, "_expert_store", None) if rec is not None else None
     if store is None:
         return None
     st = store.stats()
     st["name"] = "Orbit Dobu"
-    # Prefer Orbit vocabulary in telemetry
-    top_dobu = getattr(rec, "top_dobu", None) or getattr(rec, "top_k", None)
-    st["top_dobu"] = top_dobu
-    st["top_dobu_chunks"] = top_dobu
+    st["top_k"] = getattr(rec, "top_k", None)  # router (Spider)
+    st["top_dobu"] = getattr(rec, "top_dobu", None) or st.get("max_gpu_experts")
+    st["top_k_role"] = "router_experts_per_token"
+    st["top_dobu_role"] = "gpu_chunk_residency_lru"
     return st
 
 

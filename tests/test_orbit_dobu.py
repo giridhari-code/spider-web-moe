@@ -20,14 +20,15 @@ def _cfg(offload=False):
 
 def test_dobu_config_apply():
     cfg = _cfg(False)
-    DobuConfig(enabled=True, max_gpu_chunks=3).apply_to_model_config(cfg)
+    DobuConfig(enabled=True, top_dobu=3).apply_to_model_config(cfg)
     assert cfg.offload_experts is True
     assert cfg.offload_max_gpu_experts == 3
+    assert cfg.top_k == 2  # router unchanged by Dobu
 
 
 def test_enable_dobu_on_model():
     model = SpiderWebLM(_cfg(False)).eval()
-    store = enable_dobu(model, DobuConfig(enabled=True, max_gpu_chunks=2))
+    store = enable_dobu(model, DobuConfig(enabled=True, top_dobu=2))
     assert model.recurrent.offload_experts is True
     assert model.recurrent._expert_store is store
     x = torch.randint(0, 64, (1, 4))
@@ -46,7 +47,7 @@ def test_dobu_parity_with_resident_experts():
     torch.manual_seed(0)
     b = SpiderWebLM(_cfg(False)).eval()
     b.load_state_dict(a.state_dict())
-    enable_dobu(b, DobuConfig(max_gpu_chunks=4))
+    enable_dobu(b, DobuConfig(top_dobu=4))
     x = torch.randint(0, 64, (2, 5))
     with torch.no_grad():
         assert torch.allclose(a(x)["logits"], b(x)["logits"], rtol=1e-4, atol=1e-4)

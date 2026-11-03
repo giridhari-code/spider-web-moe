@@ -165,7 +165,8 @@ class SpiderMoELayer(nn.Module):
         super().__init__()
         h, e = cfg.hidden_size, cfg.num_experts
         self.num_experts, self.top_k = e, cfg.top_k
-        self.top_dobu = int(cfg.top_k)  # Orbit Dobu name for top-k width
+        # top_dobu = GPU chunk LRU (Dobu); independent of router top_k
+        self.top_dobu = int(getattr(cfg, "offload_max_gpu_experts", 4))
         self.edges_per_expert = cfg.edges_per_expert
         self.router = nn.Linear(h, e, bias=False)
         self.loop_bias = nn.Parameter(torch.zeros(cfg.num_loops, e))
@@ -189,11 +190,12 @@ class SpiderMoELayer(nn.Module):
         if self.offload_experts:
             # Build CPU chunk catalogue; expert modules themselves leave the GPU.
             compute = next(self.router.parameters()).device
+            self.top_dobu = int(getattr(cfg, "offload_max_gpu_experts", 4))
             self._expert_store = ExpertChunkStore(
                 self.experts,
                 storage_device="cpu",
                 compute_device=compute,
-                max_gpu_experts=int(getattr(cfg, "offload_max_gpu_experts", 4)),
+                max_gpu_experts=self.top_dobu,
             )
             offload_module_list_to_cpu(self.experts)
         # Optional 4-bit expert weights (populated by quantize_experts()).
@@ -281,7 +283,7 @@ class SpiderMoELayer(nn.Module):
         # Offload path: expert chunks stay on CPU; only routed experts hit GPU.
         if self._expert_store is not None:
             delta = self._expert_store.sparse_delta(
-                messages, top_indices, top_weights, top_dobu=self.top_dobu
+                messages, top_indices, top_weights, top_k=self.top_k
             )
         else:
             if self._int4_w_up is not None:

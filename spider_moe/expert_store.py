@@ -2,8 +2,9 @@
 
 Orbit Dobu (Orbit / Spider):
   Full MoE weight tensors do not need to sit on the GPU.
-  Keep expert chunks on CPU (pinned); after the router picks top-dobu
-  (classic name: top-k), materialise only those expert FFNs on compute,
+  Keep expert chunks on CPU (pinned); after the router picks top-k experts,
+  materialise only those expert FFNs on compute (Dobu residency / top_dobu
+  controls the GPU LRU working set size, not the router width),
   then optionally drop them so idle experts never occupy VRAM.
 
 This is the sparse-serving analogue of "don't load the whole LLM into RAM".
@@ -122,24 +123,20 @@ class ExpertChunkStore:
         messages: torch.Tensor,
         top_indices: torch.Tensor,
         top_weights: torch.Tensor,
-        top_dobu: int | None = None,
-        top_k: int | None = None,
+        top_k: int,
     ) -> torch.Tensor:
-        """Same contract as sparse_expert_delta, but weights come from chunks.
+        """Run FFNs for router-selected experts; weights come from Dobu chunks.
 
-        ``top_dobu`` is the Orbit name for how many chunks activate per token.
-        ``top_k`` remains accepted as a legacy alias.
+        ``top_k`` is the *router* width (indices last dim). GPU how many chunks
+        stay hot is ``max_gpu_experts`` / Orbit ``top_dobu`` on this store — a
+        separate memory policy applied inside ``_materialise``.
         """
-        n = top_dobu if top_dobu is not None else top_k
-        if n is None:
-            raise TypeError("top_dobu (or legacy top_k) is required")
-        top_dobu = int(n)
         # Follow activation device (model may have been .to(cuda) after init).
         self.compute_device = messages.device
         b, t, width = messages.shape
         flat_msg = messages.reshape(-1, width)
-        flat_idx = top_indices.reshape(-1, top_dobu)
-        flat_w = top_weights.reshape(-1, top_dobu)
+        flat_idx = top_indices.reshape(-1, top_k)
+        flat_w = top_weights.reshape(-1, top_k)
         n_tokens = flat_msg.shape[0]
         delta_flat = flat_msg.new_zeros(n_tokens, width)
 
@@ -148,7 +145,7 @@ class ExpertChunkStore:
         for eid in used:
             eid = int(eid)
             token_weight = flat_msg.new_zeros(n_tokens)
-            for k in range(top_dobu):
+            for k in range(top_k):
                 mask_k = flat_idx[:, k] == eid
                 token_weight = token_weight + flat_w[:, k] * mask_k.to(flat_w.dtype)
             active = token_weight > 0
@@ -194,7 +191,8 @@ class ExpertChunkStore:
             "hits": self.hits,
             "misses": self.misses,
             "loads": self.loads,
-            "policy": "top-dobu",
+            "top_dobu_lru": self.max_gpu_experts,
+            "policy": "dobu_residency",
         }
 
 

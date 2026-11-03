@@ -72,11 +72,15 @@ class OrbitEngine:
         # Orbit Dobu — demand-loaded expert chunks
         if getattr(orbit_config, "dobu_enabled", False) and hasattr(model, "cfg"):
             model.cfg.offload_experts = True
-            model.cfg.offload_max_gpu_experts = int(
-                getattr(orbit_config, "dobu_max_gpu_chunks", 4)
+            # Residency only — do not touch router top_k
+            top_dobu = int(
+                getattr(
+                    orbit_config,
+                    "top_dobu",
+                    getattr(orbit_config, "dobu_max_gpu_chunks", 4),
+                )
             )
-            if hasattr(model.cfg, "top_k"):
-                model.cfg.top_k = int(getattr(orbit_config, "top_dobu", model.cfg.top_k))
+            model.cfg.offload_max_gpu_experts = top_dobu
         engine = LLMEngine(model, **engine_kwargs)
         # Prefer decode + Orbit loop budget in scheduler
         if hasattr(engine.config, "scheduler"):
