@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #if defined(_WIN32)
@@ -108,6 +109,14 @@ SPIDER_API int spider_moe_loop_step_f32(
     const float* exit_proj, float exit_threshold,
     float* h_next, uint8_t* exit_mask,
     int32_t* tmp_assign, float* tmp_route, float* tmp_messages);
+
+/* Phase 2.0 causal attention */
+SPIDER_API size_t spider_attention_workspace_bytes(int B, int T, int H, int n_heads);
+
+SPIDER_API int spider_attention_causal_f32(
+    const float* x, int B, int T, int H, int n_heads,
+    const float* W_qkv, const float* W_o,
+    float* out, float* workspace);
 
 SPIDER_API const char* spider_backend_name(void);
 SPIDER_API uint32_t spider_backend_caps(void);
