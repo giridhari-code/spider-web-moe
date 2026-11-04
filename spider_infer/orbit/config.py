@@ -6,23 +6,7 @@ from dataclasses import dataclass
 
 @dataclass
 class OrbitConfig:
-    """Knobs that make Orbit Spider-aware rather than dense-Transformer-aware.
-
-    Parameters
-    ----------
-    max_loops:
-        Hard ceiling on recurrent orbits per token (usually model.num_loops).
-    early_exit:
-        Allow tokens to leave orbit when exit_head confidence exceeds threshold.
-    exit_threshold:
-        Sigmoid threshold on exit_head; higher = stay in orbit longer.
-    prefer_decode:
-        Scheduler prefers decode orbits over new prefills (latency-friendly).
-    track_orbit_stats:
-        Record per-step active-set sizes and loops-used histograms.
-    page_size:
-        KV page size for attention shells (vLLM-style paging, Spider-scoped).
-    """
+    """Knobs that make Orbit Spider-aware rather than dense-Transformer-aware."""
 
     max_loops: int = 4
     early_exit: bool = True
@@ -30,22 +14,18 @@ class OrbitConfig:
     prefer_decode: bool = True
     track_orbit_stats: bool = True
     page_size: int = 16
-    # Orbit 0.2: scheduler decode budget in (seq × loops) units; 0 = unlimited.
     max_orbit_work: int = 0
-    # Orbit 0.3: allow CUDA graph capture when early_exit is False.
     enable_cuda_graph: bool = True
     graph_length_bucket: int = 64
-    # Orbit 0.4: speculative draft orbits (0 disables).
     draft_tokens: int = 0
-    # spider (default) | dense (minimal dense Transformer, no vLLM)
     architecture: str = "spider"
-    # Orbit Dobu: demand-load expert weight chunks (CPU storage → GPU on route)
     dobu_enabled: bool = False
     dobu_max_gpu_chunks: int = 4
-    # top-dobu: GPU expert-chunk LRU size (memory). Router width is ModelConfig.top_k.
     top_dobu: int = 4
-    # Forge compute fabric (attention/gemm/ep/tile/select)
     forge_enabled: bool = True
+    # Phase 2: run MoE (+ optional native attn) without torch.nn forward
+    native_compute: bool = False
+    spiderw_path: str | None = None
 
     def validate(self) -> "OrbitConfig":
         if self.max_loops < 1:
@@ -56,4 +36,7 @@ class OrbitConfig:
             raise ValueError("page_size must be >= 1")
         if self.max_orbit_work < 0:
             raise ValueError("max_orbit_work must be >= 0")
+        if self.native_compute and not self.spiderw_path:
+            # path may be attached later via from_spiderw
+            pass
         return self
