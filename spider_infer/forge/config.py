@@ -11,74 +11,55 @@ class ForgeBackend(str, Enum):
     TORCH = "torch"          # portable reference (always available)
     TRITON = "triton"        # Triton GPU kernels
     CUDA = "cuda"            # custom CUDA / FlashMLA-class
-    ASCEND = "ascend"        # Huawei NPU path (future)
+    ASCEND = "ascend"        # Huawei NPU (torch_npu)
     AUTO = "auto"            # pick best available
 
 
 @dataclass
 class ForgeConfig:
-    """Master switchboard for the Forge fabric.
-
-    Every pillar is always present in the design; backends may degrade to
-    TORCH without removing the API surface.
-    """
+    """Master switchboard for the Forge fabric."""
 
     backend: ForgeBackend = ForgeBackend.AUTO
 
-    # --- Attention (FlashMLA analogue) ---
     attention_enabled: bool = True
     attention_page_size: int = 16
-    attention_use_mla: bool = True          # multi-latent style compress path
-    mla_latent_rank: int = 0                # 0 → D//4 in mla_decode
+    attention_use_mla: bool = True
+    mla_latent_rank: int = 0
     attention_softmax_scale: float | None = None
 
-    # --- GEMM (DeepGEMM analogue) ---
     gemm_enabled: bool = True
     gemm_tf32: bool = True
     gemm_fp8: bool = False
     gemm_workspace_mb: int = 64
 
-    # --- Expert parallel (DeepEP analogue) ---
     ep_enabled: bool = True
-    ep_async: bool = False                  # overlap dispatch with compute
-    ep_num_sms_hint: int = 0                # 0 = auto
+    ep_async: bool = False
+    ep_num_sms_hint: int = 0
 
-    # --- Tile DSL (TileLang analogue) ---
     tile_enabled: bool = True
     tile_default_block_m: int = 64
     tile_default_block_n: int = 64
     tile_default_block_k: int = 32
 
-    # --- Select (DeepSelect analogue) ---
     select_enabled: bool = True
-    select_top_k: int = 2                   # router width (Spider top_k)
-    select_top_dobu: int = 4                # Dobu GPU residency (separate!)
+    select_top_k: int = 2
+    select_top_dobu: int = 4
 
-    # --- Device / sync ---
-    device: str = "cuda"
+    device: str = "cuda"       # "cuda", "cpu", "npu", "npu:0"
     allow_cpu_fallback: bool = True
 
     extra: dict = field(default_factory=dict)
 
     def resolve_backend(self) -> ForgeBackend:
-        if self.backend != ForgeBackend.AUTO:
-            return self.backend
-        try:
-            import torch
-            if torch.cuda.is_available():
-                try:
-                    import triton  # noqa: F401
-                    return ForgeBackend.TRITON
-                except ImportError:
-                    return ForgeBackend.CUDA if torch.cuda.is_available() else ForgeBackend.TORCH
-        except ImportError:
-            pass
-        return ForgeBackend.TORCH
+        from spider_infer.forge.backends.detect import detect_capabilities, pick_backend
+
+        return pick_backend(self.backend, device_hint=self.device, caps=detect_capabilities())
 
     def to_dict(self) -> dict:
         return {
             "name": "Forge",
             "backend": self.resolve_backend().value,
+            "requested_backend": self.backend.value,
             "attention": self.attention_enabled,
             "gemm": self.gemm_enabled,
             "ep": self.ep_enabled,

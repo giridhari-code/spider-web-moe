@@ -12,6 +12,7 @@ from spider_infer.forge.gemm.triton_kernels import (
     triton_expert_ffn,
     get_last_forge_gemm_backend,
 )
+from spider_infer.forge.backends.ascend import AscendOps
 from spider_infer.forge.gemm.fp8 import (
     fp8_linear,
     fp8_expert_ffn,
@@ -27,7 +28,8 @@ class ForgeGEMM:
         self.device = device
         self.backend = backend
         self.calls = 0
-        self._impl = "triton+fp8+torch"
+        self._impl = "triton+fp8+torch+ascend"
+        self._ascend = AscendOps() if backend.value == "ascend" else None
 
     def linear(
         self,
@@ -36,6 +38,8 @@ class ForgeGEMM:
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
         self.calls += 1
+        if self._ascend is not None and self._ascend.available:
+            return self._ascend.linear(x, weight, bias)
         if self.config.gemm_fp8:
             return fp8_linear(x, weight, bias)
         return triton_linear(x, weight, bias)

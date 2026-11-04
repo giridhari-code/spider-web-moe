@@ -28,6 +28,7 @@ from .ep import ForgeEP, DeepEPStyleDispatcher, build_dispatch_plan, dispatch_ex
 from .tile import ForgeTile, TileKernelSpec
 from .select import ForgeSelect, DeepSelectStyleRouter
 from .runtime import ForgeDevice, synchronize_forge
+from .backends import detect_capabilities, pick_backend, ascend_available
 
 __all__ = [
     "ForgeConfig",
@@ -49,7 +50,10 @@ __all__ = [
     "DeepSelectStyleRouter",
     "ForgeDevice",
     "synchronize_forge",
+    "detect_capabilities",
+    "pick_backend",
+    "ascend_available",
     "FORGE_VERSION",
 ]
 
-FORGE_VERSION = "0.4.0"
+FORGE_VERSION = "0.5.0"

@@ -12,7 +12,7 @@ from spider_infer.forge.ep.dispatch import (
 
 
 def test_forge_version_0_4():
-    assert FORGE_VERSION == "0.4.0"
+    assert tuple(map(int, FORGE_VERSION.split(".")[:2])) >= (0, 4)
 
 
 def test_build_dispatch_plan_packs_tokens():

@@ -32,7 +32,7 @@ Roadmap of bodies (API frozen)
   0.2  Triton paged decode + GEMM expert path (shipped)
   0.3  FlashMLA-style latent attn + FP8 GEMM (shipped)
   0.4  DeepEP-style dispatch / combine (shipped)
-  0.5  Ascend / multi-backend
+  0.5  Ascend / multi-backend (shipped)
 """
 
 FORGE_PILLARS = (
