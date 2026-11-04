@@ -1,12 +1,12 @@
-"""Orbit native compute backend — Phase 1.
+"""Orbit native compute backend — Phase 1 / 1.1.
 
 Runs Spider MoE loop steps through libspider_kernels without torch on that path.
-Attention shells (prelude/coda) may still use torch until Forge attention is native.
+Phase 1.1: edge_value destination projection + graph_v2 when weights present.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -14,7 +14,7 @@ from .weight_loader import SpiderWBundle, load_spiderw
 
 try:
     from kernels.python.spider_native import NativeKernels, build_csr_from_edges
-except ImportError:  # package layout variants
+except ImportError:
     try:
         from spider_web_moe.kernels.python.spider_native import (  # type: ignore
             NativeKernels,
@@ -25,23 +25,52 @@ except ImportError:  # package layout variants
         build_csr_from_edges = None  # type: ignore
 
 
+def _edge_project_np(hidden: np.ndarray, W_edge: np.ndarray) -> np.ndarray:
+    """projected[b,e,:] = hidden[b] @ W_edge[e].T with W [E,H,H] as Linear [out,in]."""
+    B, H = hidden.shape
+    E = W_edge.shape[0]
+    out = np.zeros((B, E, H), dtype=np.float32)
+    for e in range(E):
+        out[:, e, :] = hidden @ W_edge[e].T
+    return out
+
+
+def _graph_v2_np(
+    projected: np.ndarray,
+    row_ptr: np.ndarray,
+    col_idx: np.ndarray,
+    edge_w: np.ndarray,
+    assign: np.ndarray,
+) -> np.ndarray:
+    B, E, H = projected.shape
+    K = assign.shape[1]
+    messages = np.zeros((B, H), dtype=np.float32)
+    for b in range(B):
+        for k in range(K):
+            src = int(assign[b, k])
+            if src < 0:
+                continue
+            for edge in range(int(row_ptr[src]), int(row_ptr[src + 1])):
+                dst = int(col_idx[edge])
+                messages[b] += float(edge_w[edge]) * projected[b, dst]
+    return messages
+
+
 @dataclass
 class NativeOrbitConfig:
     max_loops: int = 4
     early_exit: bool = True
     exit_threshold: float = 0.85
-    residual_scale: float = 1.0  # alpha
-    reinject_weight: float = 0.0  # beta
+    residual_scale: float = 1.0
+    reinject_weight: float = 0.0
     eps: float = 1e-5
     prefer_cuda: bool = True
 
 
 @dataclass
 class NativeMoEState:
-    """Device-agnostic (host) activations for Phase 1."""
-
-    h: np.ndarray  # [B, H]
-    x0: np.ndarray  # [B, H]
+    h: np.ndarray
+    x0: np.ndarray
 
 
 @dataclass
@@ -88,7 +117,6 @@ class NativeBackend:
     def moe_loop_step(
         self, h: np.ndarray, x0: np.ndarray, loop_idx: int
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """One recurrent Spider-MoE step. Returns (h_next, exit_mask)."""
         m = self.meta
         h = np.ascontiguousarray(h, dtype=np.float32)
         x0 = np.ascontiguousarray(x0, dtype=np.float32)
@@ -96,28 +124,34 @@ class NativeBackend:
         assert H == m.hidden_size
 
         router_w = self.bundle.require("router").astype(np.float32)
-        # logits = h @ W_router ; W stored [H, E]
+        if router_w.shape[0] != H:
+            router_w = router_w.T
         logits = h @ router_w
         loop_bias = self.bundle.require("loop_bias").astype(np.float32)
-        if loop_bias.ndim == 1:
-            bias_row = loop_bias
-        else:
-            bias_row = loop_bias[loop_idx]
-
+        bias_row = loop_bias if loop_bias.ndim == 1 else loop_bias[loop_idx]
         route, assign = self.kernels.router(logits, bias_row, k=m.top_k, loop_idx=0)
-        # router kernel adds bias internally when given full bias table; we pass row
 
         if self.row_ptr is None:
-            # Identity-like empty graph: messages = 0
-            messages = np.zeros_like(h)
+            messages = h.copy()
+        elif "edge_value" in self.bundle.tensors:
+            W_edge = self.bundle.require("edge_value").astype(np.float32)
+            if W_edge.ndim == 2:
+                W_edge = W_edge.reshape(m.num_experts, H, H)
+            if hasattr(self.kernels, "edge_project"):
+                projected = self.kernels.edge_project(h, W_edge)
+                messages = self.kernels.graph_v2(
+                    projected, self.row_ptr, self.col_idx, self.edge_w, assign,
+                    E=m.num_experts,
+                    loop_idx=min(loop_idx, max(m.num_loops - 1, 0)),
+                )
+            else:
+                projected = _edge_project_np(h, W_edge)
+                messages = _graph_v2_np(
+                    projected, self.row_ptr, self.col_idx, self.edge_w, assign
+                )
         else:
             messages = self.kernels.graph(
-                h,
-                self.row_ptr,
-                self.col_idx,
-                self.edge_w,
-                assign,
-                route,
+                h, self.row_ptr, self.col_idx, self.edge_w, assign, route,
                 E=m.num_experts,
                 loop_idx=min(loop_idx, max(m.num_loops - 1, 0)),
             )
@@ -135,11 +169,7 @@ class NativeBackend:
             gamma, bias = norm[0], norm[1]
 
         h_next = self.kernels.epilogue(
-            h,
-            delta,
-            x0,
-            gamma,
-            bias,
+            h, delta, x0, gamma, bias,
             alpha=self.config.residual_scale,
             beta=self.config.reinject_weight,
             eps=self.config.eps,
@@ -161,7 +191,6 @@ class NativeBackend:
             if not active.any():
                 break
             h_next, exit_mask = self.moe_loop_step(h, x0, loop_idx)
-            # update only active tokens
             h = np.where(active[:, None], h_next, h)
             if self.config.early_exit:
                 active = active & (exit_mask == 0)
@@ -174,7 +203,7 @@ class NativeBackend:
     def snapshot(self) -> Dict[str, Any]:
         return {
             "technology": "Orbit-Native",
-            "phase": 1,
+            "phase": "1.1",
             "backend": getattr(self.kernels, "backend", "unknown"),
             "meta": {
                 "hidden": self.meta.hidden_size,
@@ -183,12 +212,12 @@ class NativeBackend:
                 "top_k": self.meta.top_k,
             },
             "has_csr": self.row_ptr is not None,
+            "has_edge_value": "edge_value" in self.bundle.tensors,
             "early_exit": self.config.early_exit,
         }
 
 
 def attach_native_to_orbit_engine(engine: Any, spiderw_path: str, **kwargs) -> Any:
-    """Attach NativeBackend onto an existing OrbitEngine / LLMEngine facade."""
     backend = NativeBackend.from_spiderw(spiderw_path, kwargs.get("config"))
     engine._native_backend = backend  # type: ignore[attr-defined]
     engine.native_snapshot = backend.snapshot  # type: ignore[attr-defined]
