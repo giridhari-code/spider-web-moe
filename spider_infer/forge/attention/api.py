@@ -8,15 +8,16 @@ import torch.nn.functional as F
 
 from spider_infer.forge.config import ForgeBackend, ForgeConfig
 from spider_infer.forge.runtime import ForgeDevice
+from spider_infer.forge.attention.triton_kernels import (
+    forge_paged_decode,
+    get_last_forge_attn_backend,
+)
 
 
 class ForgeAttention:
     """Unified attention entry used by Orbit shells (prelude/coda).
 
-    Backends
-    --------
-    TORCH  — SDPA reference
-    TRITON/CUDA — plug FlashMLA-style kernels when compiled (same API)
+    Forge 0.2: paged_decode uses Triton on CUDA, torch gather otherwise.
     """
 
     def __init__(self, config: ForgeConfig, device: ForgeDevice, backend: ForgeBackend):
@@ -24,7 +25,7 @@ class ForgeAttention:
         self.device = device
         self.backend = backend
         self.calls = 0
-        self._impl = "torch_sdpa"
+        self._impl = "torch_sdpa+triton_paged"
 
     def decode(
         self,
@@ -35,71 +36,49 @@ class ForgeAttention:
         causal: bool = False,
         scale: float | None = None,
     ) -> torch.Tensor:
-        """Single-step or short-query attention. q/k/v: [B,H,T,D] or [B,T,H,D] via SDPA."""
         self.calls += 1
         scale = scale if scale is not None else self.config.attention_softmax_scale
-        # Expect [B, H, T, D] for SDPA
         if q.ndim != 4:
             raise ValueError("q must be [B,H,T,D]")
-        out = F.scaled_dot_product_attention(
-            q, k, v, is_causal=causal, scale=scale
-        )
-        return out
+        return F.scaled_dot_product_attention(q, k, v, is_causal=causal, scale=scale)
 
     def paged_decode(
         self,
         q: torch.Tensor,
-        cache_k: torch.Tensor,
-        cache_v: torch.Tensor,
-        block_tables: torch.Tensor,
+        k_cache: torch.Tensor,
+        v_cache: torch.Tensor,
+        block_table: torch.Tensor,
         seq_lens: torch.Tensor,
         *,
         page_size: int | None = None,
+        scale: float | None = None,
     ) -> torch.Tensor:
-        """Paged KV decode — architecture stable; body may call Triton path later.
-
-        For now gathers pages then SDPA (correctness-first, FlashMLA-shaped API).
-        """
+        """Paged KV decode — Triton (0.2) or torch reference."""
         self.calls += 1
         page_size = page_size or self.config.attention_page_size
-        # q: [B, H, 1, D]; cache: [num_pages, H, page_size, D] simplified layout
-        # Reference gather — production FlashMLA replaces this body.
-        b, h, tq, d = q.shape
-        if tq != 1:
-            # fall back to dense path if caller packed full K/V
-            return self.decode(q, cache_k, cache_v, causal=False)
-        outs = []
-        for i in range(b):
-            length = int(seq_lens[i].item())
-            n_blocks = (length + page_size - 1) // page_size
-            pieces_k = []
-            pieces_v = []
-            for bi in range(n_blocks):
-                page = int(block_tables[i, bi].item())
-                if page < 0:
-                    break
-                pieces_k.append(cache_k[page])
-                pieces_v.append(cache_v[page])
-            if not pieces_k:
-                outs.append(q[i : i + 1].zeros_like(q[i : i + 1]))
-                continue
-            k = torch.cat(pieces_k, dim=1)[:, :length]  # [H, L, D]
-            v = torch.cat(pieces_v, dim=1)[:, :length]
-            qi = q[i]  # [H, 1, D]
-            oi = F.scaled_dot_product_attention(
-                qi.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), is_causal=False
-            )
-            outs.append(oi)
-        return torch.cat(outs, dim=0)
+        scale = scale if scale is not None else self.config.attention_softmax_scale
+        return forge_paged_decode(
+            q,
+            k_cache,
+            v_cache,
+            block_table,
+            seq_lens,
+            page_size=page_size,
+            scale=scale,
+        )
 
     def stats(self) -> dict[str, Any]:
+        backend, err = get_last_forge_attn_backend()
         return {
             "pillar": "attention",
             "analogue": "FlashMLA",
             "impl": self._impl,
             "backend": self.backend.value,
+            "last_kernel": backend,
+            "last_error": err,
             "calls": self.calls,
             "mla_flag": self.config.attention_use_mla,
+            "forge_version_target": "0.2",
         }
 
 

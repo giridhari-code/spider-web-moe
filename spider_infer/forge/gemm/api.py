@@ -8,13 +8,17 @@ import torch.nn.functional as F
 
 from spider_infer.forge.config import ForgeBackend, ForgeConfig
 from spider_infer.forge.runtime import ForgeDevice
+from spider_infer.forge.gemm.triton_kernels import (
+    triton_linear,
+    triton_expert_ffn,
+    get_last_forge_gemm_backend,
+)
 
 
 class ForgeGEMM:
     """High-throughput GEMM facade.
 
-    DeepGEMM maps here: same call sites for expert up/down projections;
-    CUDA/FP8 plugins swap the body without changing Orbit/Dobu callers.
+    Forge 0.2: linear / expert_ffn prefer Triton GEMM on CUDA.
     """
 
     def __init__(self, config: ForgeConfig, device: ForgeDevice, backend: ForgeBackend):
@@ -22,7 +26,7 @@ class ForgeGEMM:
         self.device = device
         self.backend = backend
         self.calls = 0
-        self._impl = "torch_addmm"
+        self._impl = "triton_gemm+torch_fallback"
 
     def linear(
         self,
@@ -30,9 +34,8 @@ class ForgeGEMM:
         weight: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """x @ weight.T + bias  (weight: [out, in])."""
         self.calls += 1
-        return F.linear(x, weight, bias)
+        return triton_linear(x, weight, bias)
 
     def expert_ffn(
         self,
@@ -42,20 +45,21 @@ class ForgeGEMM:
         w_down: torch.Tensor,
         b_down: torch.Tensor | None,
     ) -> torch.Tensor:
-        """Standard expert FFN: GELU(x W_up) W_down."""
         self.calls += 1
-        h = F.linear(x, w_up, b_up)
-        h = F.gelu(h)
-        return F.linear(h, w_down, b_down)
+        return triton_expert_ffn(x, w_up, b_up, w_down, b_down)
 
     def stats(self) -> dict[str, Any]:
+        backend, err = get_last_forge_gemm_backend()
         return {
             "pillar": "gemm",
             "analogue": "DeepGEMM",
             "impl": self._impl,
             "backend": self.backend.value,
+            "last_kernel": backend,
+            "last_error": err,
             "calls": self.calls,
             "fp8": self.config.gemm_fp8,
+            "forge_version_target": "0.2",
         }
 
 

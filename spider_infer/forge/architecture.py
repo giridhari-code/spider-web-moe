@@ -29,7 +29,7 @@ Design rules
 Roadmap of bodies (API frozen)
 ------------------------------
   0.1  torch reference (shipped skeleton)
-  0.2  Triton paged decode + GEMM expert path
+  0.2  Triton paged decode + GEMM expert path (shipped)
   0.3  CUDA FlashMLA-style + DeepGEMM FP8
   0.4  DeepEP-style dispatch (replace all_reduce where beneficial)
   0.5  Ascend / multi-backend
