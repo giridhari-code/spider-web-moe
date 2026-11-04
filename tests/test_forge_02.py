@@ -71,7 +71,7 @@ def test_expert_ffn_finite():
 
 def test_forge_runtime_uses_0_2_impls():
     rt = init_forge(ForgeConfig(device="cpu", backend=ForgeBackend.TORCH))
-        impl = rt.attention.stats()["impl"]
+    impl = rt.attention.stats()["impl"]
     assert any(s in impl for s in ("triton", "torch", "paged", "mla"))
     assert rt.gemm.stats()["forge_version_target"] >= "0.2"
     x = torch.randn(3, 8)
