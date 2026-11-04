@@ -12,14 +12,29 @@
 extern "C" {
 #endif
 
-// Phase-1 native kernels use contiguous FP32 tensors. See docs/KERNEL_BACKENDS.md.
-// Return 0 on success, nonzero on invalid arguments.
+/* Phase-1 native kernels.
+ * FP32 is fully implemented (scalar / ARM / CUDA).
+ * FP16 entry points exist for ABI stability; may return -2 if not compiled in.
+ * Return 0 on success, nonzero on invalid arguments / unsupported.
+ */
+
 SPIDER_API int spider_router_f32(
     const float* logits, const float* loop_bias, int B, int E, int K, int loop_idx,
     float* out_weights, int32_t* out_indices);
 
+SPIDER_API int spider_router_f16(
+    const uint16_t* logits, const uint16_t* loop_bias, int B, int E, int K, int loop_idx,
+    float* out_weights, int32_t* out_indices);
+
 SPIDER_API int spider_graph_message_passing_f32(
     const float* hidden, int B, int H, int E, int K,
+    const int32_t* adj_row_ptr, const int32_t* adj_col_idx,
+    const float* edge_weights, int nnz, int loop_idx,
+    const int32_t* expert_assign, const float* route_weights,
+    float* messages);
+
+SPIDER_API int spider_graph_message_passing_f16(
+    const uint16_t* hidden, int B, int H, int E, int K,
     const int32_t* adj_row_ptr, const int32_t* adj_col_idx,
     const float* edge_weights, int nnz, int loop_idx,
     const int32_t* expert_assign, const float* route_weights,
@@ -30,7 +45,17 @@ SPIDER_API int spider_expert_grouped_gemm_f32(
     const int32_t* expert_assign, const float* route_weights,
     const float* W_up, const float* W_down, float* output);
 
+SPIDER_API int spider_expert_grouped_gemm_f16(
+    const float* tokens, int B, int H, int H_up, int E, int K,
+    const int32_t* expert_assign, const float* route_weights,
+    const uint16_t* W_up, const uint16_t* W_down, float* output);
+
 SPIDER_API int spider_loop_epilogue_f32(
+    const float* h, const float* delta, const float* input_embed,
+    int B, int H, float alpha, float beta,
+    const float* ln_weight, const float* ln_bias, float eps, float* h_next);
+
+SPIDER_API int spider_loop_epilogue_f16(
     const float* h, const float* delta, const float* input_embed,
     int B, int H, float alpha, float beta,
     const float* ln_weight, const float* ln_bias, float eps, float* h_next);
@@ -39,8 +64,18 @@ SPIDER_API int spider_early_exit_f32(
     const float* h, const float* exit_proj, int B, int H,
     float threshold, uint8_t* should_exit);
 
-// Explicit backend availability; ARM function selects NEON when compiled for ARM.
+SPIDER_API int spider_moe_loop_step_f32(
+    const float* h, const float* x0, int B, int H, int E, int K, int U, int loop_idx,
+    const float* router_w, const float* loop_bias,
+    const int32_t* row_ptr, const int32_t* col_idx, const float* edge_w, int nnz,
+    const float* W_up, const float* W_down,
+    const float* ln_weight, const float* ln_bias, float alpha, float beta, float eps,
+    const float* exit_proj, float exit_threshold,
+    float* h_next, uint8_t* exit_mask,
+    int32_t* tmp_assign, float* tmp_route, float* tmp_messages);
+
 SPIDER_API const char* spider_backend_name(void);
+SPIDER_API uint32_t spider_backend_caps(void);
 
 #ifdef __cplusplus
 }

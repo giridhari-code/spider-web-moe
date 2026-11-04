@@ -35,3 +35,6 @@ if(SPIDER_BUILD_TESTS)
   target_link_libraries(spider_kernel_smoke PRIVATE spider_kernels)
   add_test(NAME spider_kernel_smoke COMMAND spider_kernel_smoke)
 endif()
+
+install(DIRECTORY kernels/include/ DESTINATION include)
+install(TARGETS spider_kernels LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
