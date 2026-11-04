@@ -9,6 +9,7 @@ set(SPIDER_COMMON
   kernels/scalar/scalar.cpp
   kernels/scalar/scalar_phase1_1.cpp
   kernels/scalar/scalar_phase1_2.cpp
+  kernels/scalar/scalar_phase1_3.cpp
   kernels/src/phase1_api_ext.cpp
 )
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" SPIDER_ARCH)
@@ -45,6 +46,9 @@ if(SPIDER_BUILD_TESTS)
   add_executable(spider_kernel_phase1_2 kernels/tests/test_phase1_2.cpp)
   target_link_libraries(spider_kernel_phase1_2 PRIVATE spider_kernels)
   add_test(NAME spider_kernel_phase1_2 COMMAND spider_kernel_phase1_2)
+  add_executable(spider_kernel_phase1_3 kernels/tests/test_phase1_3.cpp)
+  target_link_libraries(spider_kernel_phase1_3 PRIVATE spider_kernels)
+  add_test(NAME spider_kernel_phase1_3 COMMAND spider_kernel_phase1_3)
 endif()
 
 install(DIRECTORY kernels/include/ DESTINATION include)

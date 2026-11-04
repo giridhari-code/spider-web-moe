@@ -44,7 +44,6 @@ SPIDER_API int spider_graph_message_passing_v2_f32(
     const float* edge_weights, int nnz, int loop_idx,
     const int32_t* assign, float* messages);
 
-/* Phase 1.2 dynamic edges */
 SPIDER_API int spider_edge_topk_f32(
     const float* edge_logits, int B, int E, int M,
     int32_t* edge_indices, float* edge_weights);
@@ -59,6 +58,22 @@ SPIDER_API int spider_graph_dynamic_with_edge_value_f32(
     const float* W_edge,
     const int32_t* edge_indices, const float* edge_weights,
     const int32_t* assign, float* messages, float* tmp_projected);
+
+SPIDER_API int spider_edge_generator_f32(
+    const float* hidden, int B, int H, int E,
+    const float* loop_emb, int loop_emb_dim,
+    const float* W_gen, float* out_logits);
+
+SPIDER_API int spider_edge_generator_topk_f32(
+    const float* hidden, int B, int H, int E, int M,
+    const float* loop_emb, int loop_emb_dim, const float* W_gen,
+    int32_t* edge_indices, float* edge_weights, float* tmp_logits);
+
+SPIDER_API int spider_graph_from_generator_f32(
+    const float* hidden, int B, int H, int E, int K, int M,
+    const float* loop_emb, int loop_emb_dim, const float* W_gen, const float* W_edge,
+    const int32_t* assign, float* messages,
+    float* tmp_logits, int32_t* tmp_edge_idx, float* tmp_edge_w, float* tmp_projected);
 
 SPIDER_API int spider_expert_grouped_gemm_f32(
     const float* tokens, int B, int H, int H_up, int E, int K,
