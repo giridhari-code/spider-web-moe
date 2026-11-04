@@ -18,6 +18,7 @@ from spider_moe.model import SpiderWebLM
 from .config import OrbitConfig
 from spider_infer.memory.optimize import memory_report
 from .dobu import dobu_stats
+from spider_infer.forge import get_forge, init_forge, ForgeConfig
 
 
 @dataclass
@@ -81,6 +82,16 @@ class OrbitEngine:
                 )
             )
             model.cfg.offload_max_gpu_experts = top_dobu
+        if getattr(orbit_config, "forge_enabled", True):
+            init_forge(
+                ForgeConfig(
+                    device=str(next(model.parameters()).device),
+                    select_top_k=int(getattr(model.cfg, "top_k", 2)),
+                    select_top_dobu=int(
+                        getattr(orbit_config, "top_dobu", 4)
+                    ),
+                )
+            )
         engine = LLMEngine(model, **engine_kwargs)
         # Prefer decode + Orbit loop budget in scheduler
         if hasattr(engine.config, "scheduler"):
@@ -214,6 +225,7 @@ class OrbitEngine:
                 else None
             ),
             "dobu": dobu_stats(self.inner.model),
+            "forge": get_forge().snapshot() if getattr(self.orbit_config, "forge_enabled", True) else None,
             "memory": memory_report(
                 model=self.inner.model,
                 block_manager=getattr(self.inner, "block_manager", None)

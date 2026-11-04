@@ -44,6 +44,8 @@ class OrbitConfig:
     dobu_max_gpu_chunks: int = 4
     # top-dobu: GPU expert-chunk LRU size (memory). Router width is ModelConfig.top_k.
     top_dobu: int = 4
+    # Forge compute fabric (attention/gemm/ep/tile/select)
+    forge_enabled: bool = True
 
     def validate(self) -> "OrbitConfig":
         if self.max_loops < 1:
