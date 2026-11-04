@@ -10,7 +10,7 @@ from spider_moe.quant import fp8_available
 
 
 def test_forge_version_0_3():
-    assert FORGE_VERSION == "0.3.0"
+    assert tuple(map(int, FORGE_VERSION.split(".")[:2])) >= (0, 3)
 
 
 def test_mla_decode_shape_and_finite():

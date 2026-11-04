@@ -24,7 +24,7 @@ from .config import ForgeConfig, ForgeBackend
 from .registry import ForgeRuntime, get_forge, init_forge
 from .attention import ForgeAttention, FlashMLAStyleAttention
 from .gemm import ForgeGEMM, DeepGEMMStyleLinear
-from .ep import ForgeEP, DeepEPStyleDispatcher
+from .ep import ForgeEP, DeepEPStyleDispatcher, build_dispatch_plan, dispatch_expert_ffn
 from .tile import ForgeTile, TileKernelSpec
 from .select import ForgeSelect, DeepSelectStyleRouter
 from .runtime import ForgeDevice, synchronize_forge
@@ -41,6 +41,8 @@ __all__ = [
     "DeepGEMMStyleLinear",
     "ForgeEP",
     "DeepEPStyleDispatcher",
+    "build_dispatch_plan",
+    "dispatch_expert_ffn",
     "ForgeTile",
     "TileKernelSpec",
     "ForgeSelect",
@@ -50,4 +52,4 @@ __all__ = [
     "FORGE_VERSION",
 ]
 
-FORGE_VERSION = "0.3.0"
+FORGE_VERSION = "0.4.0"

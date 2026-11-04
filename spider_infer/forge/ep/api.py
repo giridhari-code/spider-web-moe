@@ -1,22 +1,29 @@
-"""Forge EP — DeepEP-class expert-parallel dispatch / combine."""
+"""Forge EP — DeepEP-class expert-parallel dispatch / combine (0.4)."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 import torch
-import torch.distributed as dist
 
 from spider_infer.forge.config import ForgeBackend, ForgeConfig
 from spider_infer.forge.runtime import ForgeDevice
 from spider_moe.expert_parallel import ep_enabled, get_rank_world, owns_expert, all_reduce_sum_
+from spider_infer.forge.ep.dispatch import (
+    DispatchPlan,
+    build_dispatch_plan,
+    combine_across_ranks,
+    dispatch_expert_ffn,
+    dispatch_tokens,
+    get_last_ep_dispatch_backend,
+)
 
 
 class ForgeEP:
     """Token dispatch + combine across expert-parallel ranks.
 
-    DeepEP provides optimized all-to-all; this API is the stable Orbit surface.
-    Current body: ownership mask + SUM all_reduce (correct, simple).
-    Future body: NVSHMEM / DeepEP-style dispatch without API change.
+    Forge 0.4:
+      dispatch_plan / run_dispatched_ffn — DeepEP-style pack→compute→scatter
+      combine — cross-rank SUM (all_reduce today; NVSHMEM later)
     """
 
     def __init__(self, config: ForgeConfig, device: ForgeDevice, backend: ForgeBackend):
@@ -24,7 +31,7 @@ class ForgeEP:
         self.device = device
         self.backend = backend
         self.calls = 0
-        self._impl = "allreduce_sum"
+        self._impl = "dispatch_combine_v04"
 
     def enabled(self) -> bool:
         return bool(self.config.ep_enabled) and ep_enabled()
@@ -37,23 +44,64 @@ class ForgeEP:
         return owns_expert(expert_id, rank, world)
 
     def combine(self, delta: torch.Tensor) -> torch.Tensor:
-        """Sum partial expert outputs across EP ranks (in-place when possible)."""
         self.calls += 1
-        if self.enabled():
-            all_reduce_sum_(delta)
-        return delta
+        return combine_across_ranks(delta)
 
     def dispatch_meta(self, top_indices: torch.Tensor, num_experts: int) -> dict:
-        """Describe which local experts see which tokens (planning aid)."""
         self.calls += 1
+        plan = build_dispatch_plan(
+            top_indices,
+            torch.ones_like(top_indices, dtype=torch.float32),
+            num_experts=num_experts,
+            local_only=True,
+        )
         rank, world = self.rank_world()
-        local = [e for e in range(num_experts) if owns_expert(e, rank, world)]
         return {
             "rank": rank,
             "world": world,
-            "local_experts": local,
+            "local_experts": plan.local_expert_ids,
+            "assignments": len(plan.assignments),
             "top_indices_shape": list(top_indices.shape),
         }
+
+    def dispatch_plan(
+        self,
+        top_indices: torch.Tensor,
+        top_weights: torch.Tensor,
+        num_experts: int,
+    ) -> DispatchPlan:
+        """Build DeepEP-style token packs for this step."""
+        self.calls += 1
+        return build_dispatch_plan(
+            top_indices, top_weights, num_experts=num_experts, local_only=True
+        )
+
+    def run_dispatched_ffn(
+        self,
+        messages: torch.Tensor,
+        top_indices: torch.Tensor,
+        top_weights: torch.Tensor,
+        *,
+        w_up: torch.Tensor,
+        b_up: torch.Tensor,
+        w_down: torch.Tensor,
+        b_down: torch.Tensor,
+        num_experts: int,
+        expert_fn: Callable | None = None,
+    ) -> torch.Tensor:
+        """dispatch → expert FFN → combine (+ cross-rank)."""
+        self.calls += 1
+        return dispatch_expert_ffn(
+            messages,
+            top_indices,
+            top_weights,
+            w_up=w_up,
+            b_up=b_up,
+            w_down=w_down,
+            b_down=b_down,
+            num_experts=num_experts,
+            expert_fn=expert_fn,
+        )
 
     def stats(self) -> dict[str, Any]:
         rank, world = self.rank_world()
@@ -62,11 +110,13 @@ class ForgeEP:
             "analogue": "DeepEP",
             "impl": self._impl,
             "backend": self.backend.value,
+            "last_kernel": get_last_ep_dispatch_backend(),
             "calls": self.calls,
             "dist_initialized": ep_enabled(),
             "rank": rank,
             "world": world,
             "async": self.config.ep_async,
+            "forge_version_target": "0.4",
         }
 
 
