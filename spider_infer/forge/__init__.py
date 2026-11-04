@@ -50,4 +50,4 @@ __all__ = [
     "FORGE_VERSION",
 ]
 
-FORGE_VERSION = "0.2.0"
+FORGE_VERSION = "0.3.0"

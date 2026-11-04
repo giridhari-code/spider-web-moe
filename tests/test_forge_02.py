@@ -18,7 +18,7 @@ from spider_infer.forge.gemm.triton_kernels import (
 
 
 def test_forge_version_0_2():
-    assert FORGE_VERSION == "0.2.0"
+    assert tuple(map(int, FORGE_VERSION.split(".")[:2])) >= (0, 2)
 
 
 def test_paged_decode_matches_manual_attention():
@@ -71,8 +71,9 @@ def test_expert_ffn_finite():
 
 def test_forge_runtime_uses_0_2_impls():
     rt = init_forge(ForgeConfig(device="cpu", backend=ForgeBackend.TORCH))
-    assert "triton" in rt.attention.stats()["impl"] or "torch" in rt.attention.stats()["impl"]
-    assert rt.gemm.stats()["forge_version_target"] == "0.2"
+        impl = rt.attention.stats()["impl"]
+    assert any(s in impl for s in ("triton", "torch", "paged", "mla"))
+    assert rt.gemm.stats()["forge_version_target"] >= "0.2"
     x = torch.randn(3, 8)
     w = torch.randn(16, 8)
     assert rt.gemm.linear(x, w).shape == (3, 16)

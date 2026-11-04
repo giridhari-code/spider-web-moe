@@ -29,6 +29,7 @@ class ForgeConfig:
     attention_enabled: bool = True
     attention_page_size: int = 16
     attention_use_mla: bool = True          # multi-latent style compress path
+    mla_latent_rank: int = 0                # 0 → D//4 in mla_decode
     attention_softmax_scale: float | None = None
 
     # --- GEMM (DeepGEMM analogue) ---
