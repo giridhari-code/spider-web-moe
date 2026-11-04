@@ -12,12 +12,6 @@
 extern "C" {
 #endif
 
-/* Phase-1 native kernels.
- * FP32 is fully implemented (scalar / ARM / CUDA).
- * FP16 entry points exist for ABI stability; may return -2 if not compiled in.
- * Return 0 on success, nonzero on invalid arguments / unsupported.
- */
-
 SPIDER_API int spider_router_f32(
     const float* logits, const float* loop_bias, int B, int E, int K, int loop_idx,
     float* out_weights, int32_t* out_indices);
@@ -39,6 +33,16 @@ SPIDER_API int spider_graph_message_passing_f16(
     const float* edge_weights, int nnz, int loop_idx,
     const int32_t* expert_assign, const float* route_weights,
     float* messages);
+
+SPIDER_API int spider_edge_project_f32(
+    const float* hidden, int B, int H, int E,
+    const float* W_edge, float* out_proj);
+
+SPIDER_API int spider_graph_message_passing_v2_f32(
+    const float* projected, int B, int H, int E, int K,
+    const int32_t* row_ptr, const int32_t* col_idx,
+    const float* edge_weights, int nnz, int loop_idx,
+    const int32_t* assign, float* messages);
 
 SPIDER_API int spider_expert_grouped_gemm_f32(
     const float* tokens, int B, int H, int H_up, int E, int K,
@@ -68,7 +72,7 @@ SPIDER_API int spider_moe_loop_step_f32(
     const float* h, const float* x0, int B, int H, int E, int K, int U, int loop_idx,
     const float* router_w, const float* loop_bias,
     const int32_t* row_ptr, const int32_t* col_idx, const float* edge_w, int nnz,
-    const float* W_up, const float* W_down,
+    const float* W_edge, const float* W_up, const float* W_down,
     const float* ln_weight, const float* ln_bias, float alpha, float beta, float eps,
     const float* exit_proj, float exit_threshold,
     float* h_next, uint8_t* exit_mask,
