@@ -29,6 +29,11 @@ class ModelConfig:
     offload_experts: bool = False
     # Max expert chunks cached on GPU when offload_experts=True (LRU).
     offload_max_gpu_experts: int = 4
+    # Lumen global workspace (Anthropic GWT / J-space inspired)
+    use_lumen: bool = False
+    lumen_slots: int = 8
+    lumen_slot_dim: int = 0  # 0 → hidden//4
+    lumen_j_lens: bool = True
     # Inference-only: set True then call model.quantize_moe_experts()
     moe_int4: bool = False
     moe_int4_group_size: int = 64

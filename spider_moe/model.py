@@ -11,6 +11,7 @@ from .expert_parallel import all_reduce_sum_, ep_enabled, get_rank_world, owns_e
 from .quant import Int4Tensor, quantize_int4
 from .sparse_experts import sparse_expert_delta
 from .expert_store import ExpertChunkStore, offload_module_list_to_cpu
+from .lumen import LumenWorkspace
 from .active_set import ActiveSet, compact_active, scatter_active
 
 
@@ -198,6 +199,15 @@ class SpiderMoELayer(nn.Module):
                 max_gpu_experts=self.top_dobu,
             )
             offload_module_list_to_cpu(self.experts)
+        # Lumen global workspace (optional)
+        self.lumen: LumenWorkspace | None = None
+        if bool(getattr(cfg, "use_lumen", False)):
+            self.lumen = LumenWorkspace(
+                hidden_size=h,
+                num_slots=int(getattr(cfg, "lumen_slots", 8)),
+                slot_dim=(int(getattr(cfg, "lumen_slot_dim", 0)) or None),
+                vocab_size=None,  # j-lens attached on full model when enabled
+            )
         # Optional 4-bit expert weights (populated by quantize_experts()).
         self._int4_w_up: Int4Tensor | None = None
         self._int4_w_down: Int4Tensor | None = None
@@ -305,6 +315,12 @@ class SpiderMoELayer(nn.Module):
             )
 
         updated = self.norm(h + self.residual_scale * delta + self.reinject_weight * x0)
+        lumen_state = None
+        if self.lumen is not None:
+            if return_stats:
+                updated, lumen_state = self.lumen(updated, return_state=True)
+            else:
+                updated = self.lumen(updated)
         if not return_stats:
             return updated
 
@@ -327,6 +343,9 @@ class SpiderMoELayer(nn.Module):
             "edge_loss": edge_aux,
             "confidence": confidence,
         }
+        if lumen_state is not None:
+            stats["lumen_slot_weights"] = lumen_state.slot_weights
+            stats["lumen_broadcast_norm"] = lumen_state.broadcast.norm(dim=-1)
         return updated, stats
 
 
@@ -342,6 +361,14 @@ class SpiderWebLM(nn.Module):
         nn.init.normal_(self.token_embedding.weight, mean=0.0, std=cfg.embedding_init_std)
         self.prelude = nn.ModuleList([TransformerLayer(cfg) for _ in range(cfg.num_prelude_layers)])
         self.recurrent = SpiderMoELayer(cfg)
+        # Model-level J-lens on Lumen slots (reportable workspace → vocab)
+        self.lumen_j = None
+        if bool(getattr(cfg, "use_lumen", False)) and bool(getattr(cfg, "lumen_j_lens", True)):
+            if self.recurrent.lumen is not None:
+                self.recurrent.lumen.j_lens = nn.Linear(
+                    self.recurrent.lumen.slot_dim, cfg.vocab_size, bias=False
+                )
+                self.lumen_j = self.recurrent.lumen.j_lens
         self.coda = nn.ModuleList([TransformerLayer(cfg) for _ in range(cfg.num_coda_layers)])
         self.final_norm = nn.LayerNorm(cfg.hidden_size)
         self.lm_head = nn.Linear(cfg.hidden_size, cfg.vocab_size, bias=False)

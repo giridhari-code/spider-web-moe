@@ -22,6 +22,7 @@ from .engine import OrbitEngine, OrbitStepStats
 from .graphs import DecodeGraphKey, orbit_graph_allowed
 from .dobu import DobuConfig, DobuStore, enable_dobu, dobu_stats
 from spider_infer.forge import init_forge, get_forge, ForgeConfig, FORGE_VERSION
+from .lumen_api import lumen_enabled, lumen_stats
 from .draft import (
     DraftOrbitConfig,
     DraftOrbitStats,
@@ -48,6 +49,8 @@ __all__ = [
     "init_forge",
     "get_forge",
     "ForgeConfig",
+    "lumen_enabled",
+    "lumen_stats",
     "draft_orbit_accept_rate_probe",
     "build_orbit_engine",
 ]
