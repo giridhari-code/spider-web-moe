@@ -1,0 +1,195 @@
+"""Orbit native compute backend — Phase 1.
+
+Runs Spider MoE loop steps through libspider_kernels without torch on that path.
+Attention shells (prelude/coda) may still use torch until Forge attention is native.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+
+from .weight_loader import SpiderWBundle, load_spiderw
+
+try:
+    from kernels.python.spider_native import NativeKernels, build_csr_from_edges
+except ImportError:  # package layout variants
+    try:
+        from spider_web_moe.kernels.python.spider_native import (  # type: ignore
+            NativeKernels,
+            build_csr_from_edges,
+        )
+    except ImportError:
+        NativeKernels = None  # type: ignore
+        build_csr_from_edges = None  # type: ignore
+
+
+@dataclass
+class NativeOrbitConfig:
+    max_loops: int = 4
+    early_exit: bool = True
+    exit_threshold: float = 0.85
+    residual_scale: float = 1.0  # alpha
+    reinject_weight: float = 0.0  # beta
+    eps: float = 1e-5
+    prefer_cuda: bool = True
+
+
+@dataclass
+class NativeMoEState:
+    """Device-agnostic (host) activations for Phase 1."""
+
+    h: np.ndarray  # [B, H]
+    x0: np.ndarray  # [B, H]
+
+
+@dataclass
+class NativeBackend:
+    bundle: SpiderWBundle
+    kernels: Any
+    config: NativeOrbitConfig = field(default_factory=NativeOrbitConfig)
+    row_ptr: Optional[np.ndarray] = None
+    col_idx: Optional[np.ndarray] = None
+    edge_w: Optional[np.ndarray] = None
+
+    @classmethod
+    def from_spiderw(
+        cls, path: str, config: Optional[NativeOrbitConfig] = None
+    ) -> "NativeBackend":
+        if NativeKernels is None:
+            raise RuntimeError("spider_native bridge not importable")
+        bundle = load_spiderw(path)
+        kernels = NativeKernels()
+        cfg = config or NativeOrbitConfig(max_loops=bundle.meta.num_loops)
+        row_ptr = col_idx = edge_w = None
+        if bundle.csr and bundle.csr.get("row_ptr") is not None:
+            row_ptr = np.ascontiguousarray(bundle.csr["row_ptr"], dtype=np.int32)
+            col_idx = np.ascontiguousarray(bundle.csr["col_idx"], dtype=np.int32)
+            edge_w = np.ascontiguousarray(bundle.csr["edge_w"], dtype=np.float32)
+        return cls(
+            bundle=bundle,
+            kernels=kernels,
+            config=cfg,
+            row_ptr=row_ptr,
+            col_idx=col_idx,
+            edge_w=edge_w,
+        )
+
+    @property
+    def meta(self):
+        return self.bundle.meta
+
+    def embed_tokens(self, token_ids: np.ndarray) -> np.ndarray:
+        emb = self.bundle.require("token_emb").astype(np.float32)
+        ids = np.ascontiguousarray(token_ids, dtype=np.int64)
+        return emb[ids]
+
+    def moe_loop_step(
+        self, h: np.ndarray, x0: np.ndarray, loop_idx: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """One recurrent Spider-MoE step. Returns (h_next, exit_mask)."""
+        m = self.meta
+        h = np.ascontiguousarray(h, dtype=np.float32)
+        x0 = np.ascontiguousarray(x0, dtype=np.float32)
+        B, H = h.shape
+        assert H == m.hidden_size
+
+        router_w = self.bundle.require("router").astype(np.float32)
+        # logits = h @ W_router ; W stored [H, E]
+        logits = h @ router_w
+        loop_bias = self.bundle.require("loop_bias").astype(np.float32)
+        if loop_bias.ndim == 1:
+            bias_row = loop_bias
+        else:
+            bias_row = loop_bias[loop_idx]
+
+        route, assign = self.kernels.router(logits, bias_row, k=m.top_k, loop_idx=0)
+        # router kernel adds bias internally when given full bias table; we pass row
+
+        if self.row_ptr is None:
+            # Identity-like empty graph: messages = 0
+            messages = np.zeros_like(h)
+        else:
+            messages = self.kernels.graph(
+                h,
+                self.row_ptr,
+                self.col_idx,
+                self.edge_w,
+                assign,
+                route,
+                E=m.num_experts,
+                loop_idx=min(loop_idx, max(m.num_loops - 1, 0)),
+            )
+
+        W_up = self.bundle.require("expert_up").astype(np.float32)
+        W_down = self.bundle.require("expert_down").astype(np.float32)
+        delta = self.kernels.expert_ffn(
+            messages, assign, route, W_up, W_down, E=m.num_experts
+        )
+
+        norm = self.bundle.require("moe_norm").astype(np.float32)
+        if norm.ndim == 1:
+            gamma, bias = norm, np.zeros_like(norm)
+        else:
+            gamma, bias = norm[0], norm[1]
+
+        h_next = self.kernels.epilogue(
+            h,
+            delta,
+            x0,
+            gamma,
+            bias,
+            alpha=self.config.residual_scale,
+            beta=self.config.reinject_weight,
+            eps=self.config.eps,
+        )
+
+        exit_mask = np.zeros((B,), dtype=np.uint8)
+        if self.config.early_exit and "exit_head" in self.bundle.tensors:
+            proj = self.bundle.require("exit_head").astype(np.float32).reshape(-1)
+            exit_mask = self.kernels.early_exit(
+                h_next, proj, threshold=self.config.exit_threshold
+            )
+        return h_next, exit_mask
+
+    def run_loops(self, h: np.ndarray, max_loops: Optional[int] = None) -> np.ndarray:
+        x0 = h.copy()
+        loops = max_loops or self.config.max_loops
+        active = np.ones((h.shape[0],), dtype=bool)
+        for loop_idx in range(loops):
+            if not active.any():
+                break
+            h_next, exit_mask = self.moe_loop_step(h, x0, loop_idx)
+            # update only active tokens
+            h = np.where(active[:, None], h_next, h)
+            if self.config.early_exit:
+                active = active & (exit_mask == 0)
+        return h
+
+    def lm_logits(self, h: np.ndarray) -> np.ndarray:
+        w = self.bundle.require("lm_head").astype(np.float32)
+        return h @ w.T if w.shape[0] == self.meta.vocab_size else h @ w
+
+    def snapshot(self) -> Dict[str, Any]:
+        return {
+            "technology": "Orbit-Native",
+            "phase": 1,
+            "backend": getattr(self.kernels, "backend", "unknown"),
+            "meta": {
+                "hidden": self.meta.hidden_size,
+                "experts": self.meta.num_experts,
+                "loops": self.meta.num_loops,
+                "top_k": self.meta.top_k,
+            },
+            "has_csr": self.row_ptr is not None,
+            "early_exit": self.config.early_exit,
+        }
+
+
+def attach_native_to_orbit_engine(engine: Any, spiderw_path: str, **kwargs) -> Any:
+    """Attach NativeBackend onto an existing OrbitEngine / LLMEngine facade."""
+    backend = NativeBackend.from_spiderw(spiderw_path, kwargs.get("config"))
+    engine._native_backend = backend  # type: ignore[attr-defined]
+    engine.native_snapshot = backend.snapshot  # type: ignore[attr-defined]
+    return engine
