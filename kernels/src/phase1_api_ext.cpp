@@ -1,4 +1,4 @@
-/* Phase-1 API extensions — merge into scalar/dispatch or compile alongside. */
+/* Phase-1 API extensions: f16 stubs + caps. moe_loop_step lives in scalar_phase1_1.cpp */
 #include "spider_kernels.h"
 
 extern "C" int spider_router_f16(const uint16_t*, const uint16_t*, int, int, int, int, float*, int32_t*) {
@@ -14,23 +14,6 @@ extern "C" int spider_loop_epilogue_f16(const float*,const float*,const float*,i
     return -2;
 }
 
-extern "C" int spider_moe_loop_step_f32(
-    const float* h, const float* x0, int B, int H, int E, int K, int U, int loop_idx,
-    const float* router_w, const float* loop_bias,
-    const int32_t* row_ptr, const int32_t* col_idx, const float* edge_w, int nnz,
-    const float* W_up, const float* W_down,
-    const float* ln_weight, const float* ln_bias, float alpha, float beta, float eps,
-    const float* exit_proj, float exit_threshold,
-    float* h_next, uint8_t* exit_mask,
-    int32_t* tmp_assign, float* tmp_route, float* tmp_messages) {
-    (void)h; (void)x0; (void)B; (void)H; (void)E; (void)K; (void)U; (void)loop_idx;
-    (void)router_w; (void)loop_bias; (void)row_ptr; (void)col_idx; (void)edge_w; (void)nnz;
-    (void)W_up; (void)W_down; (void)ln_weight; (void)ln_bias; (void)alpha; (void)beta; (void)eps;
-    (void)exit_proj; (void)exit_threshold; (void)h_next; (void)exit_mask;
-    (void)tmp_assign; (void)tmp_route; (void)tmp_messages;
-    return -3; /* Python NativeBackend composes in Phase 1 */
-}
-
 extern "C" uint32_t spider_backend_caps(void) {
-    return 1u;
+    return 1u; /* f32; bit2/4 when CUDA/NEON paths expose more */
 }

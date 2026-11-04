@@ -2,64 +2,51 @@
 
 ## Purpose
 
-Align PyTorch `SpiderMoELayer` edge construction with the native CSR kernels so
-scalar/CUDA/ARM paths are numerically definable and testable.
+Align PyTorch `SpiderMoELayer` edge construction with the native CSR kernels.
 
 ## Dimensions
 
 | Symbol | Meaning |
 |--------|---------|
-| `B` | Batch × sequence flattened tokens (Phase 1 treats each token independently) |
+| `B` | Tokens (batch × seq flattened) |
 | `H` | Hidden size |
-| `E` | Number of experts |
-| `K` | Router top-k (active source experts per token) |
-| `M` | Edges per expert (`edges_per_expert`) |
-| `L` | Loop index `0 .. num_loops-1` |
+| `E` | Experts |
+| `K` | Router top-k |
+| `M` | Edges per expert |
 
-## Router outputs (per token)
+## Phase 1.1 semantics (matches PyTorch)
 
-- `expert_assign`: `int32[B, K]` — expert ids in `[0, E)` or `-1` for unused
-- `route_weights`: `float[B, K]` — renormalized weights, sum to 1 over valid k
+```text
+W_edge[e]: [H_out, H_in]
+projected[b, e, :] = h[b] @ W_edge[e].T
 
-## CSR adjacency
-
-```
-row_ptr: int32[E+1]     // row_ptr[0]=0, row_ptr[E]=nnz
-col_idx: int32[nnz]     // destination expert id
-edge_w:  float[nnz]     // edge weight after softmax
+for src in router_top_k(token):
+  for edge (src -> dst) with weight ew:
+    messages[b] += ew * projected[b, dst, :]
 ```
 
-**Phase 1 native reference semantics (matches scalar.cpp):**
+- Source set is **binary** top-k (not route softmax weights).
+- Route weights apply in expert FFN, not graph.
+- Use `spider_edge_project_f32` + `spider_graph_message_passing_v2_f32`.
 
-For each token `b`, each selected source `src = assign[b,k]`:
+## Phase 1 legacy (still available)
 
-```
-for edge in [row_ptr[src], row_ptr[src+1]):
-    scale = edge_w[edge] * route_weights[b,k]
-    messages[b, :] += scale * hidden[b, :]
-```
-
-### PyTorch mapping note
-
-PyTorch applies per-expert `edge_value` linear maps before gather. Native Phase 1
-does **not** yet include that. Full torch parity needs Phase 1.1 (pre-apply edge_value
-or extend CSR kernel). Use this contract for native↔native parity until then.
-
-## Building CSR from edge top-m
-
-```python
-row_ptr = [0]; col_idx, edge_w = [], []
-for src in range(E):
-    for m in range(M):
-        col_idx.append(int(edge_indices[src, m]))
-        edge_w.append(float(edge_weights[src, m]))
-    row_ptr.append(len(col_idx))
+```text
+messages[b] += edge_w * route_w * hidden[b]
 ```
 
-Phase 1 Orbit assumes per-loop static CSR exported with weights.
+`spider_graph_message_passing_f32` — for older tests only.
+
+## CSR layout
+
+```
+row_ptr: int32[E+1]
+col_idx: int32[nnz]
+edge_w:  float[nnz]  # or [num_loops, nnz]
+```
 
 ## Validation
 
-- row_ptr[0]==0, row_ptr[E]==nnz
-- col_idx in [0,E), assign in [-1,E)
-- scalar vs CUDA max abs error < 1e-4 on FP32 (H≤256, B≤32)
+- Identity W_edge → dest projection equals h
+- graph_v2 with dest expert picks projected[dst]
+- scalar vs NumPy max abs error < 1e-4

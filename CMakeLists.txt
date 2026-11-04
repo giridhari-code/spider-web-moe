@@ -5,7 +5,11 @@ option(SPIDER_BUILD_TESTS "Build native parity/smoke tests" ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(SPIDER_COMMON kernels/scalar/scalar.cpp)
+set(SPIDER_COMMON
+  kernels/scalar/scalar.cpp
+  kernels/scalar/scalar_phase1_1.cpp
+  kernels/src/phase1_api_ext.cpp
+)
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" SPIDER_ARCH)
 if(SPIDER_ARCH MATCHES "aarch64|arm64|armv8|arm")
   add_library(spider_kernels SHARED ${SPIDER_COMMON} kernels/arm/arm_neon.cpp)
@@ -34,6 +38,9 @@ if(SPIDER_BUILD_TESTS)
   add_executable(spider_kernel_smoke kernels/tests/test_kernels.cpp)
   target_link_libraries(spider_kernel_smoke PRIVATE spider_kernels)
   add_test(NAME spider_kernel_smoke COMMAND spider_kernel_smoke)
+  add_executable(spider_kernel_phase1_1 kernels/tests/test_phase1_1.cpp)
+  target_link_libraries(spider_kernel_phase1_1 PRIVATE spider_kernels)
+  add_test(NAME spider_kernel_phase1_1 COMMAND spider_kernel_phase1_1)
 endif()
 
 install(DIRECTORY kernels/include/ DESTINATION include)
