@@ -13,6 +13,17 @@
 extern "C" {
 #endif
 
+/* Phase 2.1 KV cache handle (buffers owned by caller) */
+typedef struct SpiderKVCache {
+    float* keys;
+    float* values;
+    int B;
+    int n_heads;
+    int max_T;
+    int head_dim;
+    int length;
+} SpiderKVCache;
+
 SPIDER_API int spider_router_f32(
     const float* logits, const float* loop_bias, int B, int E, int K, int loop_idx,
     float* out_weights, int32_t* out_indices);
@@ -110,12 +121,23 @@ SPIDER_API int spider_moe_loop_step_f32(
     float* h_next, uint8_t* exit_mask,
     int32_t* tmp_assign, float* tmp_route, float* tmp_messages);
 
-/* Phase 2.0 causal attention */
 SPIDER_API size_t spider_attention_workspace_bytes(int B, int T, int H, int n_heads);
 
 SPIDER_API int spider_attention_causal_f32(
     const float* x, int B, int T, int H, int n_heads,
     const float* W_qkv, const float* W_o,
+    float* out, float* workspace);
+
+/* Phase 2.1 KV cache */
+SPIDER_API size_t spider_kv_bytes(int B, int n_heads, int max_T, int head_dim);
+SPIDER_API int spider_kv_init(SpiderKVCache* cache, float* keys, float* values,
+                              int B, int n_heads, int max_T, int head_dim);
+SPIDER_API int spider_kv_reset(SpiderKVCache* cache);
+SPIDER_API size_t spider_attention_kv_workspace_bytes(int B, int T, int H);
+SPIDER_API int spider_attention_causal_kv_f32(
+    const float* x, int B, int T, int H, int n_heads,
+    const float* W_qkv, const float* W_o,
+    SpiderKVCache* cache, int position,
     float* out, float* workspace);
 
 SPIDER_API const char* spider_backend_name(void);
