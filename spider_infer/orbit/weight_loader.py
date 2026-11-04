@@ -4,12 +4,13 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 
 MAGIC = b"SPIDERW1"
 HEADER_SIZE = 80
+SECTION_NAMED = 200
 
 SECTION_NAMES = {
     1: "token_emb",
@@ -31,7 +32,7 @@ SECTION_NAMES = {
 DTYPE_MAP = {
     0: np.float32,
     1: np.float16,
-    2: np.float16,  # bf16 stored as raw u16; exposed as float16 view for Phase 1
+    2: np.float16,
     3: np.int32,
     4: np.int8,
 }
@@ -99,7 +100,6 @@ def _read_header(buf: bytes) -> Tuple[SpiderWMeta, int]:
         _r0,
         _r1,
     ) = struct.unpack_from("<14I", buf, 8)
-    # skip crc + data_nbytes at 64
     meta = SpiderWMeta(
         version=version,
         flags=flags,
@@ -118,24 +118,39 @@ def _read_header(buf: bytes) -> Tuple[SpiderWMeta, int]:
 
 
 def _read_section(data: bytes, off: int) -> Tuple[str, np.ndarray, int]:
-    if off + 24 > len(data):
+    if off + 36 > len(data):
         raise ValueError("truncated section header")
     section_id, dtype_id, nbytes, rank = struct.unpack_from("<IIQI", data, off)
     off += 20
     dims = struct.unpack_from("<4I", data, off)
     off += 16
-    # header was 4+4+8+4+16 = 36
-    # fix: we already consumed 20 then 16 = 36 from original off-20
     if off + nbytes > len(data):
         raise ValueError("truncated section payload")
     dt = DTYPE_MAP.get(dtype_id)
     if dt is None:
         raise ValueError(f"unknown dtype id {dtype_id}")
-    raw = data[off : off + nbytes]
-    shape = tuple(d for d in dims[: max(rank, 1)] if d > 0) or (nbytes // np.dtype(dt).itemsize,)
-    arr = np.frombuffer(raw, dtype=dt).reshape(shape) if rank > 0 else np.frombuffer(raw, dtype=dt)
+    raw = data[off : off + int(nbytes)]
+    off_next = off + int(nbytes)
+
+    if section_id == SECTION_NAMED:
+        if len(raw) < 2:
+            raise ValueError("named section too small")
+        (nlen,) = struct.unpack_from("<H", raw, 0)
+        name = raw[2 : 2 + nlen].decode("utf-8")
+        body = raw[2 + nlen :]
+        item = np.dtype(dt).itemsize
+        shape = tuple(d for d in dims[: max(rank, 1)] if d > 0)
+        if not shape:
+            shape = (len(body) // item,)
+        arr = np.frombuffer(body, dtype=dt).reshape(shape).copy()
+        return name, arr, off_next
+
+    shape = tuple(d for d in dims[: max(rank, 1)] if d > 0) or (
+        nbytes // np.dtype(dt).itemsize,
+    )
+    arr = np.frombuffer(raw, dtype=dt).reshape(shape).copy()
     name = SECTION_NAMES.get(section_id, f"section_{section_id}")
-    return name, arr.copy(), off + int(nbytes)
+    return name, arr, off_next
 
 
 def load_spiderw(path: str | Path) -> SpiderWBundle:
@@ -144,9 +159,6 @@ def load_spiderw(path: str | Path) -> SpiderWBundle:
     meta, off = _read_header(data)
     tensors: Dict[str, np.ndarray] = {}
     while off + 36 <= len(data):
-        # detect end padding
-        if off >= len(data):
-            break
         try:
             name, arr, off = _read_section(data, off)
         except ValueError:
@@ -172,16 +184,12 @@ def write_spiderw(
     tensors: Dict[str, np.ndarray],
     section_ids: Optional[Dict[str, int]] = None,
 ) -> None:
-    """Minimal writer used by export script."""
     inv = {v: k for k, v in SECTION_NAMES.items()}
     if section_ids:
-        inv.update({v: k for k, v in section_ids.items()})
+        inv.update(section_ids)
 
     parts = []
     for name, arr in tensors.items():
-        sid = inv.get(name)
-        if sid is None:
-            continue
         arr = np.ascontiguousarray(arr)
         if arr.dtype == np.float32:
             dtype_id = 0
@@ -194,10 +202,20 @@ def write_spiderw(
             dtype_id = 0
         rank = min(arr.ndim, 4)
         dims = list(arr.shape) + [1] * (4 - rank)
-        payload = arr.tobytes(order="C")
-        parts.append(struct.pack("<IIQI", sid, dtype_id, len(payload), rank))
-        parts.append(struct.pack("<4I", *[int(d) for d in dims[:4]]))
-        parts.append(payload)
+
+        sid = inv.get(name)
+        if sid is not None:
+            payload = arr.tobytes(order="C")
+            parts.append(struct.pack("<IIQI", sid, dtype_id, len(payload), rank))
+            parts.append(struct.pack("<4I", *[int(d) for d in dims[:4]]))
+            parts.append(payload)
+        else:
+            # Named section
+            nb = name.encode("utf-8")
+            body = struct.pack("<H", len(nb)) + nb + arr.tobytes(order="C")
+            parts.append(struct.pack("<IIQI", SECTION_NAMED, dtype_id, len(body), rank))
+            parts.append(struct.pack("<4I", *[int(d) for d in dims[:4]]))
+            parts.append(body)
 
     body = b"".join(parts)
     header = bytearray(HEADER_SIZE)
@@ -221,6 +239,6 @@ def write_spiderw(
         0,
         0,
     )
-    struct.pack_into("<Q", header, 64, 0)  # crc unused
+    struct.pack_into("<Q", header, 64, 0)
     struct.pack_into("<Q", header, 72, len(body))
     Path(path).write_bytes(bytes(header) + body)
