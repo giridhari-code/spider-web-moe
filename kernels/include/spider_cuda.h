@@ -1,4 +1,5 @@
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
@@ -15,6 +16,15 @@ int spider_cuda_graph_message_passing_f32(
 int spider_cuda_expert_grouped_gemm_f32(
     const float*, int, int, int, int, int,
     const int32_t*, const float*, const float*, const float*, float*, void* stream);
+
+/* Phase 1.5 tiled path */
+size_t spider_cuda_expert_workspace_bytes(int B, int K, int U);
+
+int spider_cuda_expert_grouped_gemm_v2_f32(
+    const float* tokens, int B, int H, int U, int E, int K,
+    const int32_t* assign, const float* route,
+    const float* W_up, const float* W_down,
+    float* output, float* workspace, void* stream);
 
 int spider_cuda_loop_epilogue_f32(
     const float*, const float*, const float*, int, int, float, float,

@@ -28,7 +28,10 @@ set_target_properties(spider_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if(SPIDER_ENABLE_CUDA)
   enable_language(CUDA)
-  add_library(spider_cuda SHARED kernels/cuda/spider_kernels.cu)
+  add_library(spider_cuda SHARED
+    kernels/cuda/spider_kernels.cu
+    kernels/cuda/spider_expert_v2.cu
+  )
   target_include_directories(spider_cuda PUBLIC kernels/include)
   set_target_properties(spider_cuda PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON
     CUDA_ARCHITECTURES "70;75;80;86;89")
@@ -49,6 +52,9 @@ if(SPIDER_BUILD_TESTS)
   add_executable(spider_kernel_phase1_3 kernels/tests/test_phase1_3.cpp)
   target_link_libraries(spider_kernel_phase1_3 PRIVATE spider_kernels)
   add_test(NAME spider_kernel_phase1_3 COMMAND spider_kernel_phase1_3)
+  add_executable(spider_kernel_phase1_5 kernels/tests/test_phase1_5.cpp)
+  target_link_libraries(spider_kernel_phase1_5 PRIVATE spider_kernels)
+  add_test(NAME spider_kernel_phase1_5 COMMAND spider_kernel_phase1_5)
 endif()
 
 install(DIRECTORY kernels/include/ DESTINATION include)
