@@ -13,7 +13,6 @@
 extern "C" {
 #endif
 
-/* Phase 2.1 KV cache handle (buffers owned by caller) */
 typedef struct SpiderKVCache {
     float* keys;
     float* values;
@@ -128,7 +127,6 @@ SPIDER_API int spider_attention_causal_f32(
     const float* W_qkv, const float* W_o,
     float* out, float* workspace);
 
-/* Phase 2.1 KV cache */
 SPIDER_API size_t spider_kv_bytes(int B, int n_heads, int max_T, int head_dim);
 SPIDER_API int spider_kv_init(SpiderKVCache* cache, float* keys, float* values,
                               int B, int n_heads, int max_T, int head_dim);
@@ -139,6 +137,13 @@ SPIDER_API int spider_attention_causal_kv_f32(
     const float* W_qkv, const float* W_o,
     SpiderKVCache* cache, int position,
     float* out, float* workspace);
+
+/* Phase 2.1.1 RoPE */
+SPIDER_API int spider_rope_precompute_f32(
+    int head_dim, int max_T, float theta, float* cos_out, float* sin_out);
+SPIDER_API int spider_rope_apply_f32(
+    float* x, int B, int n_heads, int T, int head_dim,
+    const float* cos_table, const float* sin_table, int position);
 
 SPIDER_API const char* spider_backend_name(void);
 SPIDER_API uint32_t spider_backend_caps(void);
