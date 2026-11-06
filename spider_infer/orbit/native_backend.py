@@ -1,6 +1,6 @@
-"""Orbit native compute backend — Phase 1–2.2.
+"""Orbit native compute backend — Phase 1–2.1.1.
 
-MoE loops via C kernels; optional causal attention + KV for prelude/coda shells.
+MoE loops via C kernels; causal attention + KV + RoPE for prelude/coda shells.
 `generate()` is greedy decode without torch.
 """
 from __future__ import annotations
@@ -49,26 +49,31 @@ def _graph_v2_np(projected, row_ptr, col_idx, edge_w, assign) -> np.ndarray:
     return messages
 
 
-def _attention_causal_np(
-    x: np.ndarray, W_qkv: np.ndarray, W_o: np.ndarray, n_heads: int
+def _rope_precompute(head_dim: int, max_T: int, theta: float = 10000.0) -> Tuple[np.ndarray, np.ndarray]:
+    """cos/sin tables [max_T, head_dim/2] — NeoX-style frequencies."""
+    half = head_dim // 2
+    inv_freq = 1.0 / (theta ** (np.arange(0, half, dtype=np.float64) * 2.0 / head_dim))
+    t = np.arange(max_T, dtype=np.float64)
+    freqs = np.outer(t, inv_freq)  # [max_T, half]
+    return np.cos(freqs).astype(np.float32), np.sin(freqs).astype(np.float32)
+
+
+def _rope_apply(
+    x: np.ndarray, cos: np.ndarray, sin: np.ndarray, position: int
 ) -> np.ndarray:
-    """x [B,T,H] full causal (no cache)."""
-    B, T, H = x.shape
-    D = H // n_heads
-    scale = 1.0 / np.sqrt(D)
-    qkv = x @ W_qkv.T  # [B,T,3H]
-    q, k, v = np.split(qkv, 3, axis=-1)
-    q = q.reshape(B, T, n_heads, D).transpose(0, 2, 1, 3)
-    k = k.reshape(B, T, n_heads, D).transpose(0, 2, 1, 3)
-    v = v.reshape(B, T, n_heads, D).transpose(0, 2, 1, 3)
-    scores = (q @ k.transpose(0, 1, 3, 2)) * scale
-    mask = np.triu(np.ones((T, T), dtype=np.bool_), k=1)
-    scores = np.where(mask, -1e9, scores)
-    scores = scores - scores.max(axis=-1, keepdims=True)
-    attn = np.exp(scores)
-    attn = attn / np.maximum(attn.sum(axis=-1, keepdims=True), 1e-20)
-    ctx = (attn @ v).transpose(0, 2, 1, 3).reshape(B, T, H)
-    return ctx @ W_o.T
+    """x [B, n_heads, T, D] → rotated; cos/sin [max_T, D/2]."""
+    B, nh, T, D = x.shape
+    half = D // 2
+    out = x.copy()
+    for ti in range(T):
+        abs_t = position + ti
+        c = cos[abs_t]  # [half]
+        s = sin[abs_t]
+        x0 = out[:, :, ti, :half]
+        x1 = out[:, :, ti, half:]
+        out[:, :, ti, :half] = x0 * c - x1 * s
+        out[:, :, ti, half:] = x0 * s + x1 * c
+    return out
 
 
 def _attention_kv_np(
@@ -79,8 +84,10 @@ def _attention_kv_np(
     keys: np.ndarray,
     values: np.ndarray,
     position: int,
+    rope_cos: Optional[np.ndarray] = None,
+    rope_sin: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, int]:
-    """x [B,T,H]; keys/values [B,n_heads,max_T,D]. Returns out [B,T,H], new_length."""
+    """x [B,T,H]; keys/values [B,n_heads,max_T,D]. Optional RoPE on Q/K."""
     B, T, H = x.shape
     D = H // n_heads
     max_T = keys.shape[2]
@@ -92,17 +99,21 @@ def _attention_kv_np(
     q = q.reshape(B, T, n_heads, D).transpose(0, 2, 1, 3)  # B,h,T,D
     k = k.reshape(B, T, n_heads, D).transpose(0, 2, 1, 3)
     v = v.reshape(B, T, n_heads, D).transpose(0, 2, 1, 3)
+
+    if rope_cos is not None and rope_sin is not None:
+        q = _rope_apply(q, rope_cos, rope_sin, position)
+        k = _rope_apply(k, rope_cos, rope_sin, position)
+
     keys[:, :, position : position + T, :] = k
     values[:, :, position : position + T, :] = v
     new_len = position + T
     out = np.zeros((B, T, H), dtype=np.float32)
     for ti in range(T):
         abs_q = position + ti
-        # q[:, :, ti] vs keys[:, :, :abs_q+1]
-        qi = q[:, :, ti : ti + 1, :]  # B,h,1,D
-        kk = keys[:, :, : abs_q + 1, :]  # B,h,L,D
+        qi = q[:, :, ti : ti + 1, :]
+        kk = keys[:, :, : abs_q + 1, :]
         vv = values[:, :, : abs_q + 1, :]
-        scores = (qi @ kk.transpose(0, 1, 3, 2)) * scale  # B,h,1,L
+        scores = (qi @ kk.transpose(0, 1, 3, 2)) * scale
         scores = scores - scores.max(axis=-1, keepdims=True)
         attn = np.exp(scores)
         attn = attn / np.maximum(attn.sum(axis=-1, keepdims=True), 1e-20)
@@ -141,6 +152,8 @@ class NativeOrbitConfig:
     eps: float = 1e-5
     prefer_cuda: bool = True
     max_seq_len: int = 2048
+    use_rope: bool = True
+    rope_theta: float = 10000.0
 
 
 @dataclass
@@ -153,6 +166,8 @@ class NativeBackend:
     edge_w: Optional[np.ndarray] = None
     _prelude_kv: List[LayerKV] = field(default_factory=list)
     _coda_kv: List[LayerKV] = field(default_factory=list)
+    _rope_cos: Optional[np.ndarray] = None
+    _rope_sin: Optional[np.ndarray] = None
 
     @classmethod
     def from_spiderw(
@@ -168,13 +183,29 @@ class NativeBackend:
             row_ptr = np.ascontiguousarray(bundle.csr["row_ptr"], dtype=np.int32)
             col_idx = np.ascontiguousarray(bundle.csr["col_idx"], dtype=np.int32)
             edge_w = np.ascontiguousarray(bundle.csr["edge_w"], dtype=np.float32)
-        return cls(
+        obj = cls(
             bundle=bundle,
             kernels=kernels,
             config=cfg,
             row_ptr=row_ptr,
             col_idx=col_idx,
             edge_w=edge_w,
+        )
+        obj._init_rope()
+        return obj
+
+    def _init_rope(self) -> None:
+        if not self.config.use_rope:
+            self._rope_cos = self._rope_sin = None
+            return
+        H = int(self.meta.hidden_size)
+        nh = self._n_heads()
+        D = H // nh
+        if D % 2 != 0:
+            self._rope_cos = self._rope_sin = None
+            return
+        self._rope_cos, self._rope_sin = _rope_precompute(
+            D, self.config.max_seq_len, self.config.rope_theta
         )
 
     @property
@@ -227,7 +258,6 @@ class NativeBackend:
         kv: LayerKV,
         position: int,
     ) -> np.ndarray:
-        """x [B,T,H] residual attn if weights exist else identity."""
         key_qkv = f"{prefix}.{layer_i}.W_qkv"
         key_o = f"{prefix}.{layer_i}.W_o"
         if key_qkv not in self.bundle.tensors or key_o not in self.bundle.tensors:
@@ -235,7 +265,6 @@ class NativeBackend:
         W_qkv = self.bundle.require(key_qkv).astype(np.float32)
         W_o = self.bundle.require(key_o).astype(np.float32)
         nh = self._n_heads()
-        # optional pre-LN
         ln_w = self.bundle.tensors.get(f"{prefix}.{layer_i}.ln1_w")
         ln_b = self.bundle.tensors.get(f"{prefix}.{layer_i}.ln1_b")
         h = x
@@ -247,11 +276,18 @@ class NativeBackend:
                 self.config.eps,
             )
         y, new_len = _attention_kv_np(
-            h, W_qkv, W_o, nh, kv.keys, kv.values, position
+            h,
+            W_qkv,
+            W_o,
+            nh,
+            kv.keys,
+            kv.values,
+            position,
+            rope_cos=self._rope_cos,
+            rope_sin=self._rope_sin,
         )
         kv.length = new_len
         x = x + y
-        # optional FFN
         up = self.bundle.tensors.get(f"{prefix}.{layer_i}.W_ffn_up")
         down = self.bundle.tensors.get(f"{prefix}.{layer_i}.W_ffn_down")
         if up is not None and down is not None:
@@ -352,7 +388,6 @@ class NativeBackend:
         return h_next, exit_mask
 
     def run_loops(self, h: np.ndarray, max_loops: Optional[int] = None) -> np.ndarray:
-        """h [B,H] or [B,T,H] — MoE on last token positions flattened."""
         if h.ndim == 3:
             B, T, H = h.shape
             flat = h.reshape(B * T, H)
@@ -376,7 +411,6 @@ class NativeBackend:
         return h
 
     def forward_sequence(self, token_ids: np.ndarray) -> np.ndarray:
-        """Prefill: token_ids [B,T] → hidden [B,T,H]."""
         ids = np.atleast_2d(np.asarray(token_ids, dtype=np.int64))
         B, T = ids.shape
         n_pre = int(getattr(self.meta, "num_prelude_layers", 0) or 0)
@@ -384,22 +418,19 @@ class NativeBackend:
         self._ensure_kv(n_pre, n_coda, B)
         self.reset_kv()
 
-        x = self.embed_tokens(ids)  # [B,T,H]
+        x = self.embed_tokens(ids)
         pos = 0
         for i in range(n_pre):
             x = self._attn_block(x, "prelude", i, self._prelude_kv[i], pos)
-        # MoE on each position (batched flat)
         x = self.run_loops(x)
         for i in range(n_coda):
             x = self._attn_block(x, "coda", i, self._coda_kv[i], pos)
-        # mark KV lengths after prefill
         for kv in self._prelude_kv + self._coda_kv:
             if kv.length == 0:
                 kv.length = T
         return x
 
     def forward_decode_step(self, token_ids: np.ndarray, position: int) -> np.ndarray:
-        """Decode one step: token_ids [B] or [B,1] → hidden [B,H]."""
         ids = np.asarray(token_ids, dtype=np.int64).reshape(-1)
         B = ids.shape[0]
         n_pre = int(getattr(self.meta, "num_prelude_layers", 0) or 0)
@@ -428,7 +459,6 @@ class NativeBackend:
         max_new_tokens: int = 32,
         eos_id: Optional[int] = None,
     ) -> np.ndarray:
-        """Greedy generate. prompt_ids [T] or [B,T] → full sequence ids [B, T+new]."""
         ids = np.atleast_2d(np.asarray(prompt_ids, dtype=np.int64))
         B, T0 = ids.shape
         h = self.forward_sequence(ids)
@@ -452,7 +482,7 @@ class NativeBackend:
     def snapshot(self) -> Dict[str, Any]:
         return {
             "technology": "Orbit-Native",
-            "phase": "2.2",
+            "phase": "2.1.1",
             "backend": getattr(self.kernels, "backend", "unknown"),
             "meta": {
                 "hidden": self.meta.hidden_size,
@@ -466,6 +496,8 @@ class NativeBackend:
             "has_edge_value": "edge_value" in self.bundle.tensors,
             "early_exit": self.config.early_exit,
             "max_seq_len": self.config.max_seq_len,
+            "use_rope": self.config.use_rope and self._rope_cos is not None,
+            "rope_theta": self.config.rope_theta,
         }
 
 
