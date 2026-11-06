@@ -34,6 +34,7 @@ if(SPIDER_ENABLE_CUDA)
   add_library(spider_cuda SHARED
     kernels/cuda/spider_kernels.cu
     kernels/cuda/spider_expert_v2.cu
+    kernels/cuda/spider_attn_cuda.cu
   )
   target_include_directories(spider_cuda PUBLIC kernels/include)
   set_target_properties(spider_cuda PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON

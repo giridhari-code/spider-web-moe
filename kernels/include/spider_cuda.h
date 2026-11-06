@@ -17,7 +17,6 @@ int spider_cuda_expert_grouped_gemm_f32(
     const float*, int, int, int, int, int,
     const int32_t*, const float*, const float*, const float*, float*, void* stream);
 
-/* Phase 1.5 tiled path */
 size_t spider_cuda_expert_workspace_bytes(int B, int K, int U);
 
 int spider_cuda_expert_grouped_gemm_v2_f32(
@@ -43,6 +42,15 @@ int spider_cuda_moe_loop_step_f32(
     float* h_next, uint8_t* exit_mask,
     int32_t* tmp_assign, float* tmp_route, float* tmp_messages,
     void* stream);
+
+/* Phase 2.4 CUDA attention + KV */
+size_t spider_cuda_attention_kv_workspace_bytes(int B, int T, int H);
+
+int spider_cuda_attention_causal_kv_f32(
+    const float* x, int B, int T, int H, int n_heads,
+    const float* W_qkv, const float* W_o,
+    float* keys, float* values, int max_T, int position, int* length_inout,
+    float* out, float* workspace, void* stream);
 
 #ifdef __cplusplus
 }
