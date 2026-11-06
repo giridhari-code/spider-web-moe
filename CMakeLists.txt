@@ -43,18 +43,6 @@ endif()
 
 if(SPIDER_BUILD_TESTS)
   enable_testing()
-  foreach(t smoke phase1_1 phase1_2 phase1_3 phase1_5 phase2 phase2_1)
-    add_executable(spider_kernel_${t} kernels/tests/test_${t}.cpp)
-    target_link_libraries(spider_kernel_${t} PRIVATE spider_kernels)
-    add_test(NAME spider_kernel_${t} COMMAND spider_kernel_${t})
-  endforeach()
-  # test file names: test_kernels.cpp for smoke
-  # fix smoke source
-endif()
-
-# explicit tests (clearer than foreach mismatch on smoke)
-if(SPIDER_BUILD_TESTS)
-  enable_testing()
   add_executable(spider_kernel_smoke kernels/tests/test_kernels.cpp)
   target_link_libraries(spider_kernel_smoke PRIVATE spider_kernels)
   add_test(NAME spider_kernel_smoke COMMAND spider_kernel_smoke)
