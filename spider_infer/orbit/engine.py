@@ -1,19 +1,17 @@
-"""OrbitEngine — Spider-native facade over LLMEngine.
+"""OrbitEngine — Spider-native facade.
 
-Phase 2.3: from_spiderw() for torch-free generate via NativeBackend.
+Torch-free path: OrbitEngine.from_spiderw → NativeBackend (no PyTorch).
+Legacy path: from_model / from_engine → LLMEngine (requires torch).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
-
-from spider_infer.engine import LLMEngine, RequestOutput
-from spider_infer.sampling_params import SamplingParams
+from typing import Any, Optional, TYPE_CHECKING
 
 from .config import OrbitConfig
-from spider_infer.memory.optimize import memory_report
-from .dobu import dobu_stats
-from spider_infer.forge import get_forge, init_forge, ForgeConfig
+
+if TYPE_CHECKING:
+    from spider_infer.engine import LLMEngine
 
 
 @dataclass
@@ -29,7 +27,7 @@ class OrbitStepStats:
 class OrbitEngine:
     """Serving entry point branded as Orbit."""
 
-    inner: Optional[LLMEngine] = None
+    inner: Any = None  # Optional[LLMEngine]
     orbit_config: OrbitConfig = field(default_factory=OrbitConfig)
     _native_backend: Any = None
     _steps: int = 0
@@ -45,7 +43,7 @@ class OrbitEngine:
         orbit_config: OrbitConfig | None = None,
         **native_kwargs: Any,
     ) -> "OrbitEngine":
-        """Torch-free Orbit: NativeBackend only (no LLMEngine / no PyTorch model)."""
+        """Torch-free Orbit: NativeBackend only."""
         from .native_backend import NativeBackend, NativeOrbitConfig
 
         orbit_config = (orbit_config or OrbitConfig()).validate()
@@ -56,10 +54,10 @@ class OrbitEngine:
             early_exit=orbit_config.early_exit,
             exit_threshold=orbit_config.exit_threshold,
             max_seq_len=int(native_kwargs.get("max_seq_len", 2048)),
+            use_rope=bool(native_kwargs.get("use_rope", True)),
         )
         backend = NativeBackend.from_spiderw(spiderw_path, ncfg)
-        eng = cls(inner=None, orbit_config=orbit_config, _native_backend=backend)
-        return eng
+        return cls(inner=None, orbit_config=orbit_config, _native_backend=backend)
 
     @classmethod
     def from_model(
@@ -68,6 +66,9 @@ class OrbitEngine:
         orbit_config: OrbitConfig | None = None,
         **engine_kwargs: Any,
     ) -> "OrbitEngine":
+        from spider_infer.engine import LLMEngine
+        from spider_infer.forge import init_forge, ForgeConfig
+
         orbit_config = (orbit_config or OrbitConfig()).validate()
         if hasattr(model, "cfg") and hasattr(model.cfg, "early_exit_threshold"):
             model.cfg.early_exit_threshold = orbit_config.exit_threshold
@@ -106,7 +107,7 @@ class OrbitEngine:
     @classmethod
     def from_engine(
         cls,
-        engine: LLMEngine,
+        engine: Any,
         orbit_config: OrbitConfig | None = None,
     ) -> "OrbitEngine":
         orbit_config = (orbit_config or OrbitConfig()).validate()
@@ -147,13 +148,14 @@ class OrbitEngine:
 
     def generate(self, *args: Any, **kwargs: Any):
         if self.inner is None:
-            # map to native greedy if sampling not required
             prompt = args[0] if args else kwargs.get("prompt_ids")
             params = kwargs.get("sampling_params")
             max_tok = 32
             if params is not None and hasattr(params, "max_tokens"):
                 max_tok = int(params.max_tokens)
             return self.native_generate(prompt, max_new_tokens=max_tok)
+        from spider_infer.sampling_params import SamplingParams
+
         params = kwargs.get("sampling_params")
         if params is None and len(args) >= 2:
             params = args[1]
@@ -170,6 +172,8 @@ class OrbitEngine:
     def generate_stream(self, *args: Any, **kwargs: Any):
         if self.inner is None:
             raise RuntimeError("stream not supported on pure native OrbitEngine yet")
+        from spider_infer.sampling_params import SamplingParams
+
         if "sampling_params" not in kwargs and self.orbit_config.early_exit:
             kwargs["sampling_params"] = SamplingParams(early_exit=True)
         elif kwargs.get("sampling_params") is not None and self.orbit_config.early_exit:
@@ -198,6 +202,7 @@ class OrbitEngine:
             "model": "Sentinel",
             "architecture": "Spider",
             "native_compute": bool(self.orbit_config.native_compute),
+            "torch_free": self.inner is None and self._native_backend is not None,
             "config": {
                 "max_loops": self.orbit_config.max_loops,
                 "early_exit": self.orbit_config.early_exit,
@@ -214,13 +219,17 @@ class OrbitEngine:
             snap["native"] = self._native_backend.snapshot()
         if self.inner is not None:
             snap["engine"] = self.inner.stats()
-            snap["dobu"] = dobu_stats(self.inner.model)
-            snap["forge"] = (
-                get_forge().snapshot()
-                if getattr(self.orbit_config, "forge_enabled", True)
-                else None
-            )
             try:
+                from .dobu import dobu_stats
+                from spider_infer.forge import get_forge
+                from spider_infer.memory.optimize import memory_report
+
+                snap["dobu"] = dobu_stats(self.inner.model)
+                snap["forge"] = (
+                    get_forge().snapshot()
+                    if getattr(self.orbit_config, "forge_enabled", True)
+                    else None
+                )
                 snap["memory"] = memory_report(
                     model=self.inner.model,
                     block_manager=getattr(self.inner, "block_manager", None)

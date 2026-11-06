@@ -1,0 +1,3 @@
+# Torch-free Orbit inference (NativeBackend / from_spiderw)
+numpy>=1.24
+PyYAML>=6.0

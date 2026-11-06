@@ -4,18 +4,26 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spider-web-moe"
-version = "1.0.0"
-description = "Sentinel — Spider-Web Looped MoE reference implementation"
+version = "1.1.0"
+description = "Sentinel — Spider-Web Looped MoE + Orbit native inference"
 requires-python = ">=3.10"
-dependencies = ["torch>=2.1", "PyYAML>=6.0"]
+dependencies = [
+  "numpy>=1.24",
+  "PyYAML>=6.0",
+]
 
 [project.optional-dependencies]
+# Training + legacy torch LLMEngine path
+torch = ["torch>=2.1"]
+train = ["torch>=2.1", "PyYAML>=6.0"]
 triton = ["triton>=3.0"]
-tokenizers = ["transformers>=4.45", "numpy>=1.24"]
-wikipedia = ["datasets>=3.0", "tokenizers>=0.20", "numpy>=1.24"]
+tokenizers = ["transformers>=4.45"]
+wikipedia = ["datasets>=3.0", "tokenizers>=0.20"]
+# Full stack (torch + extras)
+all = ["torch>=2.1", "transformers>=4.45", "triton>=3.0"]
 
 [project.scripts]
 spider = "spider_moe.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["spider_moe*", "spider_infer*"]
+include = ["spider_moe*", "spider_infer*", "kernels*"]

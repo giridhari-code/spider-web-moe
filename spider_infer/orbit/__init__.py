@@ -1,63 +1,78 @@
-"""Orbit — Spider-native inference runtime technology.
+"""Orbit — Spider-native inference runtime.
 
-Naming parallel (xAI-style):
-  Model name:        Sentinel
-  Architecture:      Spider (looped MoE + attention shells)
-  Serving tech:      Orbit   (vLLM is to dense Transformers
-                              what Orbit is to Spider)
+Torch-free entry:
+  from spider_infer.orbit.engine import OrbitEngine
+  OrbitEngine.from_spiderw(...)
 
-Versions
---------
-0.1  ActiveSet + OrbitEngine facade
-0.2  Shared ActiveSet in model path + scheduler orbit_work
-0.3  CUDA graphs keyed by (batch, length_bucket, num_loops)
-0.4  Draft orbits (shallow early-exit draft + full-loop verify)
-
-Ready surface: OrbitEngine is a drop-in for LLMEngine (server-compatible).
+Full Orbit surface (ActiveSet, draft, forge) may require torch.
 """
 
 from .config import OrbitConfig
-from .active_set import ActiveSet, compact_active, scatter_active
 from .engine import OrbitEngine, OrbitStepStats
-from .graphs import DecodeGraphKey, orbit_graph_allowed
-from .dobu import DobuConfig, DobuStore, enable_dobu, dobu_stats
-from spider_infer.forge import init_forge, get_forge, ForgeConfig, FORGE_VERSION
-from .lumen_api import lumen_enabled, lumen_stats
-from .draft import (
-    DraftOrbitConfig,
-    DraftOrbitStats,
-    draft_orbit_generate,
-    draft_orbit_accept_rate_probe,
-)
 
 __all__ = [
     "OrbitConfig",
-    "ActiveSet",
-    "compact_active",
-    "scatter_active",
     "OrbitEngine",
     "OrbitStepStats",
-    "DecodeGraphKey",
-    "orbit_graph_allowed",
-    "DraftOrbitConfig",
-    "DraftOrbitStats",
-    "draft_orbit_generate",
-    "DobuConfig",
-    "DobuStore",
-    "enable_dobu",
-    "dobu_stats",
-    "init_forge",
-    "get_forge",
-    "ForgeConfig",
-    "lumen_enabled",
-    "lumen_stats",
-    "draft_orbit_accept_rate_probe",
     "build_orbit_engine",
 ]
 
-__orbit_version__ = "0.6.0"
+__orbit_version__ = "0.6.1"
+
+# Optional torch-backed helpers — soft import so native path works without torch
+try:
+    from .active_set import ActiveSet, compact_active, scatter_active  # noqa: F401
+
+    __all__ += ["ActiveSet", "compact_active", "scatter_active"]
+except ImportError:
+    pass
+
+try:
+    from .graphs import DecodeGraphKey, orbit_graph_allowed  # noqa: F401
+
+    __all__ += ["DecodeGraphKey", "orbit_graph_allowed"]
+except ImportError:
+    pass
+
+try:
+    from .dobu import DobuConfig, DobuStore, enable_dobu, dobu_stats  # noqa: F401
+
+    __all__ += ["DobuConfig", "DobuStore", "enable_dobu", "dobu_stats"]
+except ImportError:
+    pass
+
+try:
+    from spider_infer.forge import init_forge, get_forge, ForgeConfig, FORGE_VERSION  # noqa: F401
+
+    __all__ += ["init_forge", "get_forge", "ForgeConfig"]
+except ImportError:
+    pass
+
+try:
+    from .lumen_api import lumen_enabled, lumen_stats  # noqa: F401
+
+    __all__ += ["lumen_enabled", "lumen_stats"]
+except ImportError:
+    pass
+
+try:
+    from .draft import (  # noqa: F401
+        DraftOrbitConfig,
+        DraftOrbitStats,
+        draft_orbit_generate,
+        draft_orbit_accept_rate_probe,
+    )
+
+    __all__ += [
+        "DraftOrbitConfig",
+        "DraftOrbitStats",
+        "draft_orbit_generate",
+        "draft_orbit_accept_rate_probe",
+    ]
+except ImportError:
+    pass
 
 
 def build_orbit_engine(model, orbit_config: OrbitConfig | None = None, **engine_kwargs):
-    """Convenience: model → ready OrbitEngine (server-safe)."""
+    """Convenience: torch model → OrbitEngine (requires torch)."""
     return OrbitEngine.from_model(model, orbit_config, **engine_kwargs)
