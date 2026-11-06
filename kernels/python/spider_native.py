@@ -1,4 +1,4 @@
-"""ctypes bridge to libspider_kernels / libspider_cuda (Phase 1–1.3).
+"""ctypes bridge to libspider_kernels / libspider_cuda (Phase 1–2.4).
 
 Does not import torch. Safe for Orbit native path and unit tests.
 """
@@ -71,6 +71,7 @@ def load_cuda(force: bool = False) -> Optional[ctypes.CDLL]:
         lib = _load(n)
         if lib is not None:
             _CUDA = lib
+            _bind_cuda(_CUDA)
             return _CUDA
     return None
 
@@ -119,6 +120,68 @@ def _bind(lib: ctypes.CDLL) -> None:
     if hasattr(lib, "spider_backend_caps"):
         lib.spider_backend_caps.restype = ctypes.c_uint32
 
+    # RoPE (CPU)
+    if hasattr(lib, "spider_rope_precompute_f32"):
+        lib.spider_rope_precompute_f32.argtypes = [
+            ctypes.c_int, ctypes.c_int, ctypes.c_float,
+            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+        ]
+        lib.spider_rope_precompute_f32.restype = ctypes.c_int
+    if hasattr(lib, "spider_rope_apply_f32"):
+        lib.spider_rope_apply_f32.argtypes = [
+            ctypes.POINTER(ctypes.c_float), ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), ctypes.c_int,
+        ]
+        lib.spider_rope_apply_f32.restype = ctypes.c_int
+
+    # Attention + KV (CPU)
+    if hasattr(lib, "spider_attention_causal_kv_f32"):
+        lib.spider_attention_causal_kv_f32.argtypes = [
+            ctypes.POINTER(ctypes.c_float), ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+            ctypes.c_void_p, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+        ]
+        lib.spider_attention_causal_kv_f32.restype = ctypes.c_int
+    if hasattr(lib, "spider_kv_bytes"):
+        lib.spider_kv_bytes.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+        lib.spider_kv_bytes.restype = ctypes.c_size_t
+    if hasattr(lib, "spider_attention_kv_workspace_bytes"):
+        lib.spider_attention_kv_workspace_bytes.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
+        lib.spider_attention_kv_workspace_bytes.restype = ctypes.c_size_t
+
+
+def _bind_cuda(lib: ctypes.CDLL) -> None:
+    if hasattr(lib, "spider_cuda_attention_causal_kv_f32"):
+        lib.spider_cuda_attention_causal_kv_f32.argtypes = [
+            ctypes.POINTER(ctypes.c_float), ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+            ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+            ctypes.c_void_p,
+        ]
+        lib.spider_cuda_attention_causal_kv_f32.restype = ctypes.c_int
+    if hasattr(lib, "spider_cuda_attention_kv_workspace_bytes"):
+        lib.spider_cuda_attention_kv_workspace_bytes.argtypes = [
+            ctypes.c_int, ctypes.c_int, ctypes.c_int
+        ]
+        lib.spider_cuda_attention_kv_workspace_bytes.restype = ctypes.c_size_t
+    if hasattr(lib, "spider_cuda_rope_precompute_f32"):
+        lib.spider_cuda_rope_precompute_f32.argtypes = [
+            ctypes.c_int, ctypes.c_int, ctypes.c_float,
+            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+            ctypes.c_void_p,
+        ]
+        lib.spider_cuda_rope_precompute_f32.restype = ctypes.c_int
+    if hasattr(lib, "spider_cuda_rope_apply_f32"):
+        lib.spider_cuda_rope_apply_f32.argtypes = [
+            ctypes.POINTER(ctypes.c_float), ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), ctypes.c_int,
+            ctypes.c_void_p,
+        ]
+        lib.spider_cuda_rope_apply_f32.restype = ctypes.c_int
+
 
 def _f32_ptr(a: np.ndarray):
     a = np.ascontiguousarray(a, dtype=np.float32)
@@ -131,14 +194,19 @@ def _i32_ptr(a: np.ndarray):
 
 
 class NativeKernels:
-    """High-level NumPy API over the C library (Phase 1–1.3)."""
+    """High-level NumPy API over the C library (Phase 1–2.4)."""
 
     def __init__(self) -> None:
         self.lib = load_kernels()
+        self.cuda = load_cuda()
 
     @property
     def backend(self) -> str:
         return self.lib.spider_backend_name().decode()
+
+    @property
+    def has_cuda(self) -> bool:
+        return self.cuda is not None
 
     def router(
         self, logits: np.ndarray, loop_bias: np.ndarray, k: int, loop_idx: int = 0
@@ -411,6 +479,52 @@ class NativeKernels:
             raise RuntimeError(f"spider_early_exit_f32 failed: {rc}")
         return mask
 
+    def rope_precompute(
+        self, head_dim: int, max_T: int, theta: float = 10000.0
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        half = head_dim // 2
+        cos = np.zeros((max_T, half), dtype=np.float32)
+        sin = np.zeros((max_T, half), dtype=np.float32)
+        if hasattr(self.lib, "spider_rope_precompute_f32"):
+            _, cp = _f32_ptr(cos)
+            _, sp = _f32_ptr(sin)
+            rc = self.lib.spider_rope_precompute_f32(head_dim, max_T, float(theta), cp, sp)
+            if rc != 0:
+                raise RuntimeError(f"spider_rope_precompute_f32 failed: {rc}")
+            return cos, sin
+        inv_freq = 1.0 / (theta ** (np.arange(0, half, dtype=np.float64) * 2.0 / head_dim))
+        t = np.arange(max_T, dtype=np.float64)
+        freqs = np.outer(t, inv_freq)
+        return np.cos(freqs).astype(np.float32), np.sin(freqs).astype(np.float32)
+
+    def rope_apply(
+        self,
+        x: np.ndarray,
+        cos: np.ndarray,
+        sin: np.ndarray,
+        position: int = 0,
+    ) -> np.ndarray:
+        """x [B, n_heads, T, D] in-place style (returns new array)."""
+        x = np.ascontiguousarray(x, dtype=np.float32)
+        B, nh, T, D = x.shape
+        out = x.copy()
+        if hasattr(self.lib, "spider_rope_apply_f32"):
+            _, xp = _f32_ptr(out)
+            _, cp = _f32_ptr(cos)
+            _, sp = _f32_ptr(sin)
+            rc = self.lib.spider_rope_apply_f32(xp, B, nh, T, D, cp, sp, int(position))
+            if rc != 0:
+                raise RuntimeError(f"spider_rope_apply_f32 failed: {rc}")
+            return out
+        half = D // 2
+        for ti in range(T):
+            abs_t = position + ti
+            c, s = cos[abs_t], sin[abs_t]
+            x0, x1 = out[:, :, ti, :half], out[:, :, ti, half:]
+            out[:, :, ti, :half] = x0 * c - x1 * s
+            out[:, :, ti, half:] = x0 * s + x1 * c
+        return out
+
 
 def build_csr_from_edges(edge_indices: np.ndarray, edge_weights: np.ndarray):
     E, M = edge_indices.shape
@@ -431,11 +545,13 @@ def build_csr_from_edges(edge_indices: np.ndarray, edge_weights: np.ndarray):
 if __name__ == "__main__":
     try:
         nk = NativeKernels()
-        print("backend:", nk.backend)
+        print("backend:", nk.backend, "cuda:", nk.has_cuda)
         logits = np.array([[1, 2, 3, 4], [4, 3, 2, 1]], dtype=np.float32)
         bias = np.zeros(4, dtype=np.float32)
         w, idx = nk.router(logits, bias, k=2)
         print("router weights", w, "idx", idx)
+        cos, sin = nk.rope_precompute(8, 16)
+        print("rope cos shape", cos.shape)
     except Exception as e:
         print("native load failed:", e, file=sys.stderr)
         sys.exit(1)

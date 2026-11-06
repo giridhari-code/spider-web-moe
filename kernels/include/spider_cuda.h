@@ -43,7 +43,6 @@ int spider_cuda_moe_loop_step_f32(
     int32_t* tmp_assign, float* tmp_route, float* tmp_messages,
     void* stream);
 
-/* Phase 2.4 CUDA attention + KV */
 size_t spider_cuda_attention_kv_workspace_bytes(int B, int T, int H);
 
 int spider_cuda_attention_causal_kv_f32(
@@ -51,6 +50,13 @@ int spider_cuda_attention_causal_kv_f32(
     const float* W_qkv, const float* W_o,
     float* keys, float* values, int max_T, int position, int* length_inout,
     float* out, float* workspace, void* stream);
+
+int spider_cuda_rope_precompute_f32(
+    int head_dim, int max_T, float theta, float* cos_out, float* sin_out, void* stream);
+
+int spider_cuda_rope_apply_f32(
+    float* x, int B, int n_heads, int T, int head_dim,
+    const float* cos_table, const float* sin_table, int position, void* stream);
 
 #ifdef __cplusplus
 }
